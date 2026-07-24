@@ -1,0 +1,23 @@
+.DS_Store
+.firecrawl/
+.pytest_cache/
+.ruff_cache/
+.ty/
+.venv/
+__pycache__/
+*.py[cod]
+artifacts/checkpoints/
+artifacts/colab/
+artifacts/replay/
+dist/
+
+# Campaign artifacts: commit the evidence record (manifests, evaluation
+# results, shipping checkpoints); keep multi-GB bundles and the transient
+# local campaign mirror out of git. Bundle sha256s live in
+# artifacts/runs/a100-bootstrap/campaign-manifest.json.
+artifacts/runs/*
+!artifacts/runs/a100-bootstrap/
+artifacts/runs/a100-bootstrap/*
+!artifacts/runs/a100-bootstrap/*.json
+!artifacts/runs/a100-bootstrap/*.jsonl
+!artifacts/runs/a100-bootstrap/*.pt

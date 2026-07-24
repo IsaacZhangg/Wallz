@@ -1,0 +1,18 @@
+"""Shared board, action-space, and representation constants."""
+
+from typing import Final
+
+BOARD_SIZE: Final = 9
+WALL_GRID_SIZE: Final = BOARD_SIZE - 1
+CELL_COUNT: Final = BOARD_SIZE * BOARD_SIZE
+WALL_COUNT: Final = WALL_GRID_SIZE * WALL_GRID_SIZE
+PAWN_ACTIONS: Final = CELL_COUNT
+HORIZONTAL_ACTION_OFFSET: Final = PAWN_ACTIONS
+VERTICAL_ACTION_OFFSET: Final = PAWN_ACTIONS + WALL_COUNT
+ACTION_SIZE: Final = PAWN_ACTIONS + 2 * WALL_COUNT
+MAX_WALLS: Final = 10
+MAX_GAME_PLIES: Final = 256
+INPUT_PLANES: Final = 13
+
+PLAYER_ONE: Final = 0
+PLAYER_TWO: Final = 1

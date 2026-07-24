@@ -1,0 +1,80 @@
+{
+  "schema": "wallzero.campaign-manifest.v1",
+  "dates": ["2026-07-23", "2026-07-24"],
+  "preset": "colab",
+  "engine_note": "From round 15 on, self-play runs the wallzero.parallel engine (10 actor processes + central batched inference, leaf_batch=8 virtual loss) and arenas use leaf_batch=8: measured 17.4 positions/s at 512 sims on the A100 vs 2.4 the prior day (7.2x), identical data recipe. Rounds 15+ resumed from the round-14 bundle with best.pt rebased to best-gate-passed.pt (gate-2 evidence). Repetition draws reappeared at ~1.7% of games under virtual loss (2 in 120 at rounds 15-16 chunks); recorded per chunk.",
+  "network": {
+    "channels": 128,
+    "blocks": 10,
+    "value_hidden": 256,
+    "parameters": 3725410
+  },
+  "hardware": {
+    "gpu": "NVIDIA A100-SXM4-40GB",
+    "cuda": "12.8",
+    "torch": "2.11.0+cu128",
+    "bf16": true
+  },
+  "self_play": {
+    "chunks_durable": 33,
+    "games_per_chunk": 16,
+    "simulations": "chunks 0-24 at 64-160; chunks 25+ at 512 (deep recipe)",
+    "draws_all_chunks": 0
+  },
+  "rounds": [
+    {"round": 0, "promoted": false, "score_rate": 0.5, "arena_games": 20, "note": "pre-paired-openings arena; deterministic duplicate games"},
+    {"round": 1, "promoted": true, "score_rate": 0.6, "arena_games": 20},
+    {"round": 2, "promoted": true, "score_rate": 0.6, "arena_games": 20},
+    {"round": 3, "promoted": false, "score_rate": 0.525, "arena_games": 20},
+    {"round": 4, "promoted": false, "score_rate": 0.475, "arena_games": 20, "note": "reproduced bit-identically after VM loss from restored round-3 bundle"},
+    {"round": 5, "promoted": true, "score_rate": 0.6, "arena_games": 20},
+    {"round": 6, "promoted": false, "score_rate": 0.5, "arena_games": 30, "note": "deep recipe begins: 512-sim chunks, 1200 steps, 8K fresh window, 30-game gate"},
+    {"round": 7, "promoted": true, "score_rate": 0.583, "arena_games": 30, "note": "current best; first promotion under the stricter deep gate"},
+    {"round": 8, "promoted": false, "score_rate": 0.533, "arena_games": 30},
+    {"round": 9, "promoted": false, "score_rate": 0.483, "arena_games": 30},
+    {"round": 10, "promoted": false, "score_rate": 0.533, "arena_games": 30, "note": "ran despite a lost CLI reply; recovered from durable state"},
+    {"round": 11, "promoted": true, "score_rate": 0.633, "arena_games": 30, "note": "current campaign best; doubled fresh data (4x24-game chunks)"},
+    {"round": 12, "promoted": false, "score_rate": 0.483, "arena_games": 60, "note": "first candidate on corrected temperature schedule; its frozen checkpoint is best-independent.pt"},
+    {"round": 13, "promoted": false, "score_rate": 0.45, "arena_games": 60, "note": "threshold lowered to 0.5 (strict win still required) to prevent incumbent lock-in"},
+    {"round": 14, "promoted": false, "score_rate": 0.475, "arena_games": 60, "note": "best.pt rebased to the round-12 candidate on independent-eval evidence before this round; candidate trained 4000 steps on the fully clean 13.5K window; head-to-head even with incumbent but PASSED the independent control gate (see strength-eval); reproduced bit-identically after a VM loss"},
+    {"round": 15, "promoted": true, "score_rate": 0.5167, "arena_games": 60, "note": "first parallel-engine round: trained on 14K window incl. 5.8K fresh positions (96-game single-shard generations); promoted over the gate-2 winner 31-29"},
+    {"round": 16, "promoted": false, "score_rate": 0.35, "arena_games": 60, "note": "challenger rejected decisively; round-15 model remains best.pt"},
+    {"round": 17, "promoted": false, "score_rate": 0.4833, "arena_games": 60, "note": "first hybrid round: window included Mac-generated chunk 60 (mps); first parallel arena (10 workers, ~3.5 min for 60 games)"},
+    {"round": 18, "promoted": false, "score_rate": 0.4667, "arena_games": 60, "note": "window included Mac chunk 61"},
+    {"round": 19, "promoted": true, "score_rate": 0.525, "arena_games": 60, "note": "promoted 30-27-3; window included Mac chunk 62; best.pt = round-19 model"}
+  ],
+  "best_lineage": "random-init -> r1 -> r2 -> r5 -> r7 -> r11 (gate-promotion lineage) -> eval-informed rebase to the r12 candidate -> round-14 candidate = best-gate-passed.pt (sha256 48c9b6b9…), the shipping checkpoint.",
+  "gate_note": "Promotion gates are noisy proxies; independent evaluation is the arbiter (strength-eval.jsonl, diagnostics-16sim.jsonl). GATE 2 PASSED by the round-14 candidate: pre-declared 3-seed x 200-game suite vs uniform-MCTS at equal 192-sim budget, pooled 600 games, score 0.575, 95% CI [0.535, 0.614], per-seed 0.535/0.578/0.613. Earlier checkpoints failed the same gate (r7 0.5175@200, r11 0.4725@200, r12 0.526@500); per-seed swings up to 0.64->0.45 make multi-seed pooled designs mandatory for claims.",
+  "bundles_sha256": {
+    "campaign-stageA.tar.gz": "48d91bab0ccb22c6d88587b082dae4a53d8a6c7e99f73b63065f2fa1bc84560d",
+    "campaign-round1.tar.gz": "d6f9f1a88edacee68d11c0d80d4676fd8abd3bf225634955da1d625df7587528",
+    "campaign-round2.tar.gz": "30a15e1da699d46983a1c0cf6def037b2a6b751f3623a095479c223b3bd14ada",
+    "campaign-round3.tar.gz": "528702c9b2879a70cfea15ba05001749aeee09bb699d140e09518a32fa59552a",
+    "campaign-round4.tar.gz": "de0e9c2f17164da3602cfe70b341ac8c8762396b940febe993c7631c6a062fe2",
+    "campaign-round5.tar.gz": "b0a042412c9a55d5814caee3d8473952d73c9e9e90529dc37b61c01f6ce7845d",
+    "campaign-round6.tar.gz": "9eea044fdf507f480d7fa3952a3c5819ed4e7088e09be61ae6dbd00a05fda058",
+    "campaign-round7.tar.gz": "0e73275bfed6996a5979240987a51a391944be898bf48fc7c525e582987f380c",
+    "campaign-round8.tar.gz": "e4b450b38df0a94841be41785afe41043b4b68200590de0501d3fbd77c1f07be",
+    "campaign-round9.tar.gz": "2a05d7876a300b7e05e9340ea10b7f24ae138dfd98b2a8a7812f399d920bd8b0",
+    "campaign-round10.tar.gz": "9f8e80e6c240f3c2f08c823f715fd480fba5ed500c086552de366a2ec7483967",
+    "campaign-round11.tar.gz": "218d643f3313397511a4fa24cc06cea76dd51469da67d3d2a6a9190bf2c8adc8",
+    "campaign-gen12-chunks.tar.gz": "c646dda4b9afdfc9551e0d17cddebae6655077ef805d4f85f8bd1b7aa0636109",
+    "campaign-round12.tar.gz": "6ddba1657d7f5005a84e1aa7bf4822a0e690e3238926ac44e4bd30dee02fa34f",
+    "campaign-round13.tar.gz": "f61bf41fec704c6b754a102f4ce7f73ac0eb81d363c89a0be1c224b53b4cbe06",
+    "campaign-round14.tar.gz": "4bb7e6e49e248fcd61dc3d1320ce273c9359a254b0add408eb0c824c62d4d366",
+    "campaign-round15.tar.gz": "be45843066155a7cb34c53275bcaf0de981d6d40468ca54d3b85208ff9895921",
+    "campaign-round16.tar.gz": "707213cd207d4d9c99a3b02a15179f1884a91f180ad9f8f01caf428277f3bd5b",
+    "campaign-round19.tar.gz": "0574d0ffaffd906e5222e99539b27ac66cc9f135680371c444d6b50053be0734",
+    "best-gate-passed.pt (frozen round-14 candidate, shipping checkpoint)": "48c9b6b926ee145bd3c046b87afcd3f6bcbacf47028543173487ad929d54355d",
+    "best-independent.pt (frozen round-12 candidate)": "83a5c549ee31bfe760e395d14af20ea94ffbfefd678dad382abe9acadb99d8cd",
+    "best.pt (round-7 promotion, superseded by r11 in round11+ bundles)": "2f3caf95dbdbd398e7c8bd8e85a24800da7e4e9d0ac41eab857bfcece2c5d500",
+    "best.pt (round-2 era, superseded)": "56f704bee4f10e8eae0748b971e2055a01fe82c83a3f878f7a2abe0b77d421a9"
+  },
+  "incidents": [
+    "Four Colab sessions died at the ~70-minute mark (headless runtime cap). Durable bundles limited each loss to at most one generation of regenerable chunks; the training state never regressed.",
+    "Round 4 reproduced bit-identically after restore, demonstrating campaign determinism across VM loss.",
+    "macOS AppleDouble files in a locally built restore bundle crashed replay loading once; the loader now ignores hidden files and local tars use COPYFILE_DISABLE.",
+    "wallzero5 adopted a 60-minute working window with mid-cycle bundling and proactive stop; it terminated cleanly."
+  ],
+  "zero_human_data": true
+}

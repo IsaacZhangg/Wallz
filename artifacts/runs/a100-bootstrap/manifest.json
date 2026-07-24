@@ -1,0 +1,35 @@
+{
+  "schema": "wallzero.roundtrip-manifest.v1",
+  "date": "2026-07-23",
+  "purpose": "Durable A100 round-trip proof: upload source, run tiny chunk, bundle, download, checksum, restore locally.",
+  "session": "wallzero (Colab, released after campaign)",
+  "gpu": {
+    "name": "NVIDIA A100-SXM4-40GB",
+    "cuda": "12.8",
+    "torch": "2.11.0+cu128",
+    "bf16": true
+  },
+  "source_archive_sha256": "9e4a38a91072c18cd6f66aa156ae89d4ea43a514f71346778978bfe6cbed09d7",
+  "bundle_sha256": "96d88379eed0159ff0a8b7e503535deb2d06220dc1900ba1cff6bc02d0a4c757",
+  "chunk": {
+    "script": "scripts/colab_chunk_tiny.py",
+    "preset": "colab",
+    "games": 4,
+    "simulations": 64,
+    "positions": 144,
+    "draws": 0,
+    "repetition_draws": 0,
+    "max_ply_draws": 0,
+    "solver_moves": 56,
+    "elapsed_seconds": 14.41
+  },
+  "local_verification": {
+    "shard": "wallzero-output/replay/chunk-00000.npz",
+    "examples_loaded": 144,
+    "decisive_values": 144,
+    "checkpoint": "wallzero-output/best.pt",
+    "checkpoint_status": "random-initialization",
+    "parameters": 3725410
+  },
+  "zero_human_data": true
+}
