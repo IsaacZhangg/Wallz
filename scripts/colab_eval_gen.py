@@ -26,7 +26,10 @@ OPPONENT_PATH = Path("/content/wallzero-eval-opponents/best-gate-passed.pt")
 EVAL_PATH = OUTPUT / "strength-eval.jsonl"
 SIMULATIONS = 192
 LEAF_BATCH = 8
-SEEDS = (1_150_101, 1_150_202, 1_150_303)
+# Seed series are subject-scoped and never reused: 1_150_xxx judged the
+# round-22 best (2026-07-24 afternoon); 1_160_xxx pre-declared for the 30M
+# round-24 best before any of its evaluation games were played.
+SEEDS = (1_160_101, 1_160_202, 1_160_303)
 
 device = select_device("cuda")
 best_model, best_payload = load_checkpoint(OUTPUT / "best.pt", device=device)

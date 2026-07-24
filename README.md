@@ -214,9 +214,17 @@ initialization on the 24K-position clean window and **promoted 36-22-2 over
 the 3.7M incumbent** in the standard gate. Round 24 then trained the 30M
 network on its own first self-play (generated on the A100 at leaf_batch 16 —
 96 games in 251s, the same wall time the 3.7M network needed) and promoted
-again (0.575). The current best checkpoint is the 30M round-24 model; its
-control-gate evaluation is future work, and all strength claims above gate 2
-remain open until it runs. All self-play games end decisively — the wall-free
+again (0.575). Independent evaluation immediately deflated both promotions:
+the round-24 best sustains gate 2 against the uniform control (0.5542, 95%
+CI [0.5142, 0.5935], 600 games) but is dead even with the two-day-old
+gate-2 winner (0.5000, 95% CI [0.4601, 0.5399], 600 games) — expected after
+a single generation of its own self-play, but not progress. More decisively,
+the first direct benchmark against the userscript's classical PVS engine
+(`scripts/match_vs_classical.mjs`, evaluation-only, production adaptive
+settings) ended **0-20 against WallZero** at a 160-simulation budget. The
+uniform control that gates 1-3 measure against is a far lower bar than the
+classical engine; the score against the classical engine is now the
+project's standing real-strength benchmark, and it starts at zero. All self-play games end decisively — the wall-free
 solver eliminated draws entirely. Later generations fixed two data-quality
 defects: the cold-start exploration override was poisoning trajectory quality
 (now parameterized; deep chunks use the preset temperature schedule) and

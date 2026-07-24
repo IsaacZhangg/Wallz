@@ -21,3 +21,6 @@ artifacts/runs/a100-bootstrap/*
 !artifacts/runs/a100-bootstrap/*.json
 !artifacts/runs/a100-bootstrap/*.jsonl
 !artifacts/runs/a100-bootstrap/*.pt
+
+# Accidental root-level staging (resume bundles are built in the scratchpad)
+/wallzero-output/
