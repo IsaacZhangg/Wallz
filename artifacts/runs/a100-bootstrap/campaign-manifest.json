@@ -41,10 +41,13 @@
     {"round": 16, "promoted": false, "score_rate": 0.35, "arena_games": 60, "note": "challenger rejected decisively; round-15 model remains best.pt"},
     {"round": 17, "promoted": false, "score_rate": 0.4833, "arena_games": 60, "note": "first hybrid round: window included Mac-generated chunk 60 (mps); first parallel arena (10 workers, ~3.5 min for 60 games)"},
     {"round": 18, "promoted": false, "score_rate": 0.4667, "arena_games": 60, "note": "window included Mac chunk 61"},
-    {"round": 19, "promoted": true, "score_rate": 0.525, "arena_games": 60, "note": "promoted 30-27-3; window included Mac chunk 62; best.pt = round-19 model"}
+    {"round": 19, "promoted": true, "score_rate": 0.525, "arena_games": 60, "note": "promoted 30-27-3; window included Mac chunk 62; best.pt = round-19 model"},
+    {"round": 20, "promoted": false, "score_rate": 0.4667, "arena_games": 60},
+    {"round": 21, "promoted": true, "score_rate": 0.5833, "arena_games": 60, "note": "promoted 34-24-2"},
+    {"round": 22, "promoted": true, "score_rate": 0.625, "arena_games": 60, "note": "promoted 37-22-1; best.pt = round-22 model; subject of the gate-3 suite"}
   ],
   "best_lineage": "random-init -> r1 -> r2 -> r5 -> r7 -> r11 (gate-promotion lineage) -> eval-informed rebase to the r12 candidate -> round-14 candidate = best-gate-passed.pt (sha256 48c9b6b9…), the shipping checkpoint.",
-  "gate_note": "Promotion gates are noisy proxies; independent evaluation is the arbiter (strength-eval.jsonl, diagnostics-16sim.jsonl). GATE 2 PASSED by the round-14 candidate: pre-declared 3-seed x 200-game suite vs uniform-MCTS at equal 192-sim budget, pooled 600 games, score 0.575, 95% CI [0.535, 0.614], per-seed 0.535/0.578/0.613. Earlier checkpoints failed the same gate (r7 0.5175@200, r11 0.4725@200, r12 0.526@500); per-seed swings up to 0.64->0.45 make multi-seed pooled designs mandatory for claims.",
+  "gate_note": "Promotion gates are noisy proxies; independent evaluation is the arbiter (strength-eval.jsonl, strength-eval-gate3.jsonl, diagnostics-16sim.jsonl). GATE 2 PASSED by the round-14 candidate: pre-declared 3-seed x 200-game suite vs uniform-MCTS at equal 192-sim budget, pooled 600 games, score 0.575, 95% CI [0.535, 0.614], per-seed 0.535/0.578/0.613. Earlier checkpoints failed the same gate (r7 0.5175@200, r11 0.4725@200, r12 0.526@500); per-seed swings up to 0.64->0.45 make multi-seed pooled designs mandatory for claims. GATE 3 (2026-07-24, pre-declared, subject = round-22 best): vs uniform control 0.5792 [0.5393, 0.6180] @600 games -> gate-2 property SUSTAINED; vs frozen gate-2 winner (r14) 0.5317 [0.4917, 0.5713] @600 games -> NOT PASSED (CI includes 0.5). Two arena promotions (r21 0.583, r22 0.625) did not produce significant control-relative improvement; rounds 15-22 at 3.7M parameters read as capacity-limited, motivating the network scale-up.",
   "bundles_sha256": {
     "campaign-stageA.tar.gz": "48d91bab0ccb22c6d88587b082dae4a53d8a6c7e99f73b63065f2fa1bc84560d",
     "campaign-round1.tar.gz": "d6f9f1a88edacee68d11c0d80d4676fd8abd3bf225634955da1d625df7587528",
@@ -65,6 +68,7 @@
     "campaign-round15.tar.gz": "be45843066155a7cb34c53275bcaf0de981d6d40468ca54d3b85208ff9895921",
     "campaign-round16.tar.gz": "707213cd207d4d9c99a3b02a15179f1884a91f180ad9f8f01caf428277f3bd5b",
     "campaign-round19.tar.gz": "0574d0ffaffd906e5222e99539b27ac66cc9f135680371c444d6b50053be0734",
+    "campaign-round22.tar.gz": "2aa5b4f8188709e7bbd3f651fea18f9ba900593654aed939ebe26549b74c3d2f",
     "best-gate-passed.pt (frozen round-14 candidate, shipping checkpoint)": "48c9b6b926ee145bd3c046b87afcd3f6bcbacf47028543173487ad929d54355d",
     "best-independent.pt (frozen round-12 candidate)": "83a5c549ee31bfe760e395d14af20ea94ffbfefd678dad382abe9acadb99d8cd",
     "best.pt (round-7 promotion, superseded by r11 in round11+ bundles)": "2f3caf95dbdbd398e7c8bd8e85a24800da7e4e9d0ac41eab857bfcece2c5d500",

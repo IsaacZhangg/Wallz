@@ -200,11 +200,16 @@ self-play chunks are generated on a local M4 Pro (`scripts/local_chunk_gen.py`,
 zero compute-unit cost — self-play is actor-CPU-bound and the laptop's cores
 outpace Colab's vCPUs), while the A100 runs training and the multiprocess
 arena; each chunk's durable metrics record the generating device. Rounds
-15-19 produced two promotions (r15, r19); the current best checkpoint is the
-round-19 model. The pre-declared gate-3 suite (`scripts/colab_eval_gen.py`:
-new best vs the uniform control and vs the frozen gate-2 winner, three fresh
-seeds x 200 games each) has not yet been run — no strength claim beyond
-gate 2 is made for rounds 15+. All self-play games end decisively — the wall-free
+15-22 produced four promotions (r15, r19, r21, r22); the current best
+checkpoint is the round-22 model. The pre-declared gate-3 suite
+(`strength-eval-gate3.jsonl`) records both verdicts honestly: the round-22
+best **sustains gate 2** against the uniform control (0.5792, 95% CI
+[0.5393, 0.6180], 600 games) but its edge over the frozen gate-2 winner is
+**not statistically established** (0.5317, 95% CI [0.4917, 0.5713], 600
+games) — arena promotions again outran control-relative evidence. Eight
+same-size generations reading as flat at 3.7M parameters points to a
+capacity ceiling; the recorded next step is a network scale-up, not more
+generations at the current size. All self-play games end decisively — the wall-free
 solver eliminated draws entirely. Later generations fixed two data-quality
 defects: the cold-start exploration override was poisoning trajectory quality
 (now parameterized; deep chunks use the preset temperature schedule) and
