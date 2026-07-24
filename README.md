@@ -207,9 +207,13 @@ best **sustains gate 2** against the uniform control (0.5792, 95% CI
 [0.5393, 0.6180], 600 games) but its edge over the frozen gate-2 winner is
 **not statistically established** (0.5317, 95% CI [0.4917, 0.5713], 600
 games) — arena promotions again outran control-relative evidence. Eight
-same-size generations reading as flat at 3.7M parameters points to a
-capacity ceiling; the recorded next step is a network scale-up, not more
-generations at the current size. All self-play games end decisively — the wall-free
+same-size generations reading as flat at 3.7M parameters pointed to a
+capacity ceiling, so round 23 executed the scale-up: a fresh 29.65M-parameter
+network (256 channels x 24 blocks) trained 4,000 steps from random
+initialization on the 24K-position clean window and **promoted 36-22-2 over
+the 3.7M incumbent** in the standard gate. The current best checkpoint is the
+30M round-23 model; its control-gate evaluation is future work, and all
+strength claims above gate 2 remain open until it runs. All self-play games end decisively — the wall-free
 solver eliminated draws entirely. Later generations fixed two data-quality
 defects: the cold-start exploration override was poisoning trajectory quality
 (now parameterized; deep chunks use the preset temperature schedule) and

@@ -13,6 +13,7 @@ import torch
 
 from wallzero.arena import ArenaResult, evaluate_candidate
 from wallzero.network import (
+    NetworkConfig,
     PolicyValueNet,
     TorchEvaluator,
     load_checkpoint,
@@ -184,9 +185,17 @@ def run_training_round(
     arena_games: int | None = None,
     arena_simulations: int | None = None,
     arena_workers: int = 1,
+    candidate_network: NetworkConfig | None = None,
     device_name: str = "auto",
 ) -> Path:
-    """Train one candidate from durable shards, then gate it in the arena."""
+    """Train one candidate from durable shards, then gate it in the arena.
+
+    By default the candidate clones the incumbent's weights. Passing
+    candidate_network instead trains a freshly initialized network of a new
+    architecture on the same replay window — the scale-up path — and gates it
+    against the incumbent under the identical rules; the checkpoint carries
+    its own architecture, so later rounds continue from whichever wins.
+    """
     output_dir = Path(output)
     state_path = output_dir / "campaign-state.json"
     state = (
@@ -202,13 +211,17 @@ def run_training_round(
     if not replay:
         raise ValueError("training round requires at least one durable replay shard")
 
-    candidate = PolicyValueNet(best_model.config)
-    candidate.load_state_dict(best_model.state_dict())
     train_config = replace(
         config.train,
         steps=training_steps or config.train.steps,
         seed=config.train.seed + round_index,
     )
+    if candidate_network is None:
+        candidate = PolicyValueNet(best_model.config)
+        candidate.load_state_dict(best_model.state_dict())
+    else:
+        torch.manual_seed(train_config.seed)
+        candidate = PolicyValueNet(candidate_network)
     _emit(
         "training-start",
         {
@@ -216,6 +229,8 @@ def run_training_round(
             "replay_samples": len(replay),
             "steps": train_config.steps,
             "device": str(device),
+            "candidate_network": asdict(candidate.config),
+            "scale_up": candidate_network is not None,
         },
     )
     train_metrics, optimizer = train_candidate(candidate, replay, device, train_config)
@@ -228,6 +243,7 @@ def run_training_round(
             "round": round_index,
             "parent_metadata": best_payload.get("metadata", {}),
             "replay_samples": len(replay),
+            "scale_up": candidate_network is not None,
             "zero_human_data": True,
         },
     )
@@ -293,6 +309,8 @@ def run_training_round(
     metric = {
         "schema": "wallzero.round-metrics.v1",
         "round": round_index,
+        "candidate_network": asdict(candidate.config),
+        "scale_up": candidate_network is not None,
         "training": asdict(train_metrics),
         "arena": {
             **asdict(result),

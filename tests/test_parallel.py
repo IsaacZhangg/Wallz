@@ -190,3 +190,31 @@ def test_run_match_parallel_with_uniform_opponent() -> None:
     )
     assert report.games == 4
     assert 0.0 <= report.ci_low <= report.ci_high <= 1.0
+
+
+def test_scale_up_round_trains_and_gates_a_new_architecture(tmp_path) -> None:
+    from dataclasses import replace as dc_replace
+    from pathlib import Path
+
+    from wallzero.campaign import run_self_play_chunk, run_training_round
+    from wallzero.network import load_checkpoint
+    from wallzero.pipeline import preset
+
+    config = dc_replace(preset("smoke"), replay_window=500)
+    output = tmp_path / "campaign"
+    run_self_play_chunk(output, config, games=2, simulations=4, device_name="cpu")
+    big = NetworkConfig(channels=24, blocks=2, value_hidden=48)
+    best_path = run_training_round(
+        output,
+        config,
+        training_steps=2,
+        arena_games=2,
+        candidate_network=big,
+        device_name="cpu",
+    )
+    candidate_path = Path(output) / "candidates" / "round-00000.pt"
+    model, payload = load_checkpoint(candidate_path)
+    assert model.config == big
+    assert payload["metadata"]["scale_up"] is True
+    incumbent, _ = load_checkpoint(best_path)
+    assert incumbent.config in (big, config.network)
