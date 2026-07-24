@@ -211,9 +211,12 @@ same-size generations reading as flat at 3.7M parameters pointed to a
 capacity ceiling, so round 23 executed the scale-up: a fresh 29.65M-parameter
 network (256 channels x 24 blocks) trained 4,000 steps from random
 initialization on the 24K-position clean window and **promoted 36-22-2 over
-the 3.7M incumbent** in the standard gate. The current best checkpoint is the
-30M round-23 model; its control-gate evaluation is future work, and all
-strength claims above gate 2 remain open until it runs. All self-play games end decisively — the wall-free
+the 3.7M incumbent** in the standard gate. Round 24 then trained the 30M
+network on its own first self-play (generated on the A100 at leaf_batch 16 —
+96 games in 251s, the same wall time the 3.7M network needed) and promoted
+again (0.575). The current best checkpoint is the 30M round-24 model; its
+control-gate evaluation is future work, and all strength claims above gate 2
+remain open until it runs. All self-play games end decisively — the wall-free
 solver eliminated draws entirely. Later generations fixed two data-quality
 defects: the cold-start exploration override was poisoning trajectory quality
 (now parameterized; deep chunks use the preset temperature schedule) and

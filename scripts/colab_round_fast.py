@@ -17,9 +17,11 @@ run_training_round(
     "/content/wallzero-output",
     replace(
         _base,
-        replay_window=14_000,
+        # 24K window and leaf_batch 16 since the 30M-network era (round 24+):
+        # the larger net rewards bigger inference batches and more data/round.
+        replay_window=24_000,
         arena=replace(_base.arena, promotion_threshold=0.5),
-        arena_mcts=replace(_base.arena_mcts, simulations=256, leaf_batch=8),
+        arena_mcts=replace(_base.arena_mcts, simulations=256, leaf_batch=16),
     ),
     training_steps=4_000,
     arena_games=60,
