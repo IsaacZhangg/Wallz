@@ -1,0 +1,2 @@
+{"game":29,"wallZeroPlayer":"p2","winner":"CL","tally":"0-30-0"}
+{"schema":"wallzero.classical-match.v1","games":30,"simulations":160,"wallZeroWins":0,"classicalWins":30,"draws":0,"score":0,"ci95":[0,0.1135]}
