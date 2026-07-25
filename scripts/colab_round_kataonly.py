@@ -23,7 +23,9 @@ run_training_round(
         arena=replace(_base.arena, promotion_threshold=0.5),
         arena_mcts=replace(_base.arena_mcts, simulations=256, leaf_batch=16),
     ),
-    training_steps=4_000,
+    # KataGo reuse ratio: ~4 epochs over the window (window*4/batch), not
+    # the fixed 2M samples that silently overtrained every earlier round.
+    training_steps=600,
     arena_games=60,
     arena_workers=10,
     candidate_network=NetworkConfig(

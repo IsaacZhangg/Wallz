@@ -18,7 +18,9 @@ _base = preset("colab")
 run_training_round(
     "/content/wallzero-output",
     replace(_base, replay_window=60_000),
-    training_steps=3_000,
+    # KataGo reuse ratio: ~4 epochs over the window (window*4/batch), not
+    # the fixed 2M samples that silently overtrained every earlier round.
+    training_steps=600,
     arena_games=0,
     candidate_network=NetworkConfig(
         channels=256, blocks=24, value_hidden=512, distance_head=True
