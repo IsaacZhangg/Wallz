@@ -204,6 +204,36 @@
       "promoted": true,
       "gateless": true,
       "note": "trained on kata chunk 69 (192 games, 800/200 cap randomization, 9283 positions in 391s = 23.7 pos/s, 0 draws)"
+    },
+    {
+      "round": 27,
+      "promoted": true,
+      "gateless": true,
+      "note": "overnight kata generation"
+    },
+    {
+      "round": 28,
+      "promoted": true,
+      "gateless": true,
+      "note": "overnight kata generation"
+    },
+    {
+      "round": 29,
+      "promoted": true,
+      "gateless": true,
+      "note": "overnight kata generation"
+    },
+    {
+      "round": 30,
+      "promoted": true,
+      "gateless": true,
+      "note": "overnight kata generation"
+    },
+    {
+      "round": 31,
+      "promoted": true,
+      "gateless": true,
+      "note": "overnight kata generation"
     }
   ],
   "best_lineage": "random-init -> r1 -> r2 -> r5 -> r7 -> r11 (gate-promotion lineage) -> eval-informed rebase to the r12 candidate -> round-14 candidate = best-gate-passed.pt (sha256 48c9b6b9\u2026), the shipping checkpoint.",
@@ -235,7 +265,8 @@
     "best-independent.pt (frozen round-12 candidate)": "83a5c549ee31bfe760e395d14af20ea94ffbfefd678dad382abe9acadb99d8cd",
     "best.pt (round-7 promotion, superseded by r11 in round11+ bundles)": "2f3caf95dbdbd398e7c8bd8e85a24800da7e4e9d0ac41eab857bfcece2c5d500",
     "best.pt (round-2 era, superseded)": "56f704bee4f10e8eae0748b971e2055a01fe82c83a3f878f7a2abe0b77d421a9",
-    "campaign-round26-kata.tar.gz": "02959bfc634ea8f2f53bc218ecba7fad1adf59215883e2bc475b7fd4e1cb71cd"
+    "campaign-round26-kata.tar.gz": "02959bfc634ea8f2f53bc218ecba7fad1adf59215883e2bc475b7fd4e1cb71cd",
+    "campaign-round31-kata.tar.gz": "471d11d1082836741431c3daa03027895008959df17ce7fbc30d84c2a3ba9f25"
   },
   "incidents": [
     "Four Colab sessions died at the ~70-minute mark (headless runtime cap). Durable bundles limited each loss to at most one generation of regenerable chunks; the training state never regressed.",
