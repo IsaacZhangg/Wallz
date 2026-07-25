@@ -23,9 +23,12 @@ run_training_round(
         arena=replace(_base.arena, promotion_threshold=0.5),
         arena_mcts=replace(_base.arena_mcts, simulations=256, leaf_batch=16),
     ),
-    # KataGo reuse ratio: ~4 epochs over the window (window*4/batch), not
-    # the fixed 2M samples that silently overtrained every earlier round.
-    training_steps=600,
+    # Measured on the 65K kata-only window (round32-kataonly-metrics.jsonl vs
+    # round33-lowreuse-metrics.jsonl): 600 steps left the net underfit
+    # (policy loss 2.01 vs 1.54) and scored 0.475 vs 0.500 in the same gate.
+    # KataGo's 1-4 epoch norm reflects its millions-of-positions firehose, not
+    # a universal law; with a small window, steps-to-convergence governs.
+    training_steps=4_000,
     arena_games=60,
     arena_workers=10,
     candidate_network=NetworkConfig(
