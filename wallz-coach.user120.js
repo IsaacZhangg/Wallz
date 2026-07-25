@@ -34,7 +34,25 @@
 	// [0.535, 0.614]. Serve it with:
 	//   wallzero serve --checkpoint artifacts/runs/a100-bootstrap/best-gate-passed.pt --http 8787
 	// The bridge stays inert unless that local server responds to /health.
+	// Alt+W toggles it on/off at runtime (persisted in localStorage).
 	const WALLZERO_BRIDGE_ENABLED = true;
+	const WALLZERO_TOGGLE_KEY = "wallzCoachWallZeroEnabled";
+
+	function wallZeroUserEnabled() {
+		try {
+			return (localStorage.getItem(WALLZERO_TOGGLE_KEY) ?? "on") !== "off";
+		} catch {
+			return true;
+		}
+	}
+
+	function setWallZeroUserEnabled(on) {
+		try {
+			localStorage.setItem(WALLZERO_TOGGLE_KEY, on ? "on" : "off");
+		} catch {
+			// Storage may be blocked; the toggle then lasts for this page only.
+		}
+	}
 	const ADAPTIVE_SEARCH_LIMIT = Object.freeze({
 		id: "adaptive",
 		name: "Adaptive",
@@ -4925,7 +4943,7 @@
 			onRefresh() {
 				invalidateAnalysis(true);
 				lastFingerprint = "";
-				if (WALLZERO_BRIDGE_ENABLED) {
+				if (WALLZERO_BRIDGE_ENABLED && wallZeroUserEnabled()) {
 					void wallZeroBridge.probe().finally(() => scheduleInspect(true));
 				} else {
 					scheduleInspect(true);
@@ -5388,11 +5406,27 @@
 			{ once: true },
 		);
 
-		if (WALLZERO_BRIDGE_ENABLED) {
+		if (WALLZERO_BRIDGE_ENABLED && wallZeroUserEnabled()) {
 			void wallZeroBridge.probe().finally(() => scheduleInspect(false));
 		} else {
 			scheduleInspect(false);
 		}
+
+		document.addEventListener("keydown", (event) => {
+			if (!event.altKey || (event.key !== "w" && event.key !== "W")) {
+				return;
+			}
+			const next = !wallZeroUserEnabled();
+			setWallZeroUserEnabled(next);
+			if (next && WALLZERO_BRIDGE_ENABLED) {
+				void wallZeroBridge.probe().finally(() => scheduleInspect(true));
+			} else {
+				wallZeroBridge.reportOutage(
+					new Error("wallzero-disabled: toggled off with Alt+W"),
+				);
+				scheduleInspect(true);
+			}
+		});
 	}
 
 	return {

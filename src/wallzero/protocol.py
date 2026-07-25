@@ -198,6 +198,9 @@ def create_http_server(
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            # Chrome Private Network Access: HTTPS pages may only reach
+            # localhost when the preflight explicitly allows it.
+            self.send_header("Access-Control-Allow-Private-Network", "true")
             self.end_headers()
 
         def do_GET(self) -> None:
