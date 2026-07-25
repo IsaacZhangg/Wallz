@@ -1,0 +1,6 @@
+{"schema":"wallzero.ab-search-summary.v1","date":"2026-07-25","checkpoint":"best-gate-passed.pt","simulations":200,"note":"Same network on both sides; only the search configuration differs, so any difference is caused by the search port under test."}
+{"variant":"lcb_selection","games":40,"score":0.475,"ci95":[0.3294,0.625],"verdict":"neutral (exploratory sample size)"}
+{"variant":"distance_utility_weight=0.10","games":40,"score":0.6125,"ci95":[0.4581,0.7472],"verdict":"promising at exploratory size"}
+{"variant":"distance_utility_weight=0.20","games":40,"score":0.4625,"ci95":[0.3182,0.6134],"verdict":"neutral"}
+{"variant":"distance_utility_weight=0.35","games":40,"score":0.5625,"ci95":[0.4101,0.704],"verdict":"neutral"}
+{"variant":"distance_utility_weight=0.10","design":"pre-declared 3 seeds x 200 games, pooled","seeds":[91101,91202,91303],"per_seed":[0.4875,0.495,0.51],"games":600,"score":0.4975,"ci95":[0.4576,0.5374],"verdict":"NOT ESTABLISHED - the exploratory 0.6125 was noise"}

@@ -74,6 +74,7 @@ def run_match(
     max_plies: int = 256,
     leaf_batch: int = 1,
     workers: int = 1,
+    lcb_selection: bool = False,
 ) -> MatchReport:
     """Play a color-balanced, paired-opening match and report a 95% CI."""
     config = ArenaConfig(
@@ -87,6 +88,7 @@ def run_match(
         dirichlet_fraction=0.0,
         max_plies=max_plies,
         leaf_batch=leaf_batch,
+        lcb_selection=lcb_selection,
     )
     if workers > 1:
         result: ArenaResult = evaluate_candidate_parallel(

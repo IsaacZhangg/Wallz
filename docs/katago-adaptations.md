@@ -21,6 +21,24 @@ kata recipe is opt-in per script.
 | Global pooling structures | Already present since round 0: every residual block carries a SqueezeExcite global-pooling gate |
 | Warm-start architecture growth | `run_training_round(candidate_network=..., warm_start=True)` keeps every compatible incumbent weight when adding heads or scaling |
 
+## Implemented and measured neutral (2026-07-25)
+
+Both were ported faithfully, are covered by tests, and remain available behind
+config flags — but neither produced a measurable strength gain for this
+network at this scale, so neither is enabled by default. Evidence:
+`artifacts/runs/a100-bootstrap/ab-search-2026-07-25.jsonl`, produced by
+`scripts/ab_search.py` (same checkpoint on both sides, so only the search
+setting differs; free to run locally).
+
+| Technique | WallZero form | Measured |
+| --- | --- | --- |
+| LCB move selection | `MCTSConfig.lcb_selection` picks the root child maximizing `-mean - z*stderr` among children with at least 10% of the top visit count; per-node variance tracked through virtual loss | 0.475 over 40 games (exploratory), neutral |
+| Score utility | `MCTSConfig.distance_utility_weight` mixes `tanh((opp_dist - own_dist)/scale)` into leaf values — exact BFS margins, the Quoridor analog of KataGo's score utility | Weight 0.10 scored 0.6125 at 40 games, but a pre-declared 3-seed x 200-game confirmation pooled to **0.4975, 95% CI [0.4576, 0.5374]** — the exploratory result was noise |
+
+The lesson is the same one the campaign learned in training: 40-game samples
+cannot distinguish a real effect from noise, and every promising exploratory
+result must survive a pre-declared multi-seed design before it is believed.
+
 ## Identified, not yet implemented (ranked)
 
 1. **Subtree value bias correction** (~30-60 Elo in KataGo): online correction
@@ -30,25 +48,23 @@ kata recipe is opt-in per script.
 2. **Uncertainty-weighted MCTS playouts + short-term value targets**: needs an
    extra head predicting near-term value error; pairs with dynamic
    variance-scaled cPUCT.
-3. **LCB move selection at match time**: choose the root move by lower
-   confidence bound — free strength in arena/eval/serve play.
-4. **Opponent-next-move auxiliary policy head**: modest paper gains; deferred
+3. **Opponent-next-move auxiliary policy head**: modest paper gains; deferred
    because the current-player canonical frame makes the target subtle to get
    right, and a bug here poisons training silently.
-5. **Soft resignation**: value-threshold truncation of hopeless games with
+4. **Soft resignation**: value-threshold truncation of hopeless games with
    low-weight fast finishes; our wall-free solver adjudication already covers
    part of this — remaining benefit is midgame truncation.
-6. **Optimistic policy / auxiliary soft policy**: later-KataGo refinements,
+5. **Optimistic policy / auxiliary soft policy**: later-KataGo refinements,
    evaluate after the core recipe proves itself.
-7. **Batch-norm-free architecture (fixed-variance init, one BN)**: 1.6-1.8x
+6. **Batch-norm-free architecture (fixed-variance init, one BN)**: 1.6-1.8x
    faster training steps and cleaner multi-device behavior; an architecture
    migration to schedule alongside the next scale-up.
-8. **Fork-position curriculum**: start a fraction of self-play games from
+7. **Fork-position curriculum**: start a fraction of self-play games from
    positions sampled out of recent replay (self-generated, rule-derived) for
    opening diversity beyond temperature.
-9. **Nested bottleneck residual blocks**: KataGo's current architecture family;
+8. **Nested bottleneck residual blocks**: KataGo's current architecture family;
    relevant at the next capacity jump, not at 30M.
-10. **Multi-board-size masking**: not applicable — Quoridor is fixed 9x9.
+9. **Multi-board-size masking**: not applicable — Quoridor is fixed 9x9.
 
 ## First kata-recipe campaign scripts
 

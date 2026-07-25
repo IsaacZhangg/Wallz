@@ -96,6 +96,10 @@ class EngineService:
         config = MCTSConfig(
             simulations=simulations,
             dirichlet_fraction=0.0,
+            # Leaf batching is a pure latency win at an identical simulation
+            # budget. LCB selection stays off: measured neutral (see
+            # docs/katago-adaptations.md), and unproven changes do not ship.
+            leaf_batch=8,
         )
         tree = SearchTree.from_state(state)
         rng = np.random.default_rng(self.seed)
@@ -106,7 +110,7 @@ class EngineService:
             add_noise=False,
             rngs=[rng],
         )
-        action = tree.select_action(0.0, rng)
+        action = tree.select_action(0.0, rng, config=config)
         policy = tree.policy()
         ranked = sorted(
             tree.root.children.items() if tree.root.children else (),

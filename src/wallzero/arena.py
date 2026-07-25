@@ -112,8 +112,14 @@ def evaluate_candidate(
     *,
     progress: Callable[[ArenaResult], None] | None = None,
     initial_state: State | None = None,
+    incumbent_mcts_config: MCTSConfig | None = None,
 ) -> ArenaResult:
-    """Pit two frozen networks against each other with equally swapped colors."""
+    """Pit two frozen networks against each other with equally swapped colors.
+
+    Passing incumbent_mcts_config gives each side its own search settings,
+    which is how search-side changes are A/B tested with one fixed network.
+    """
+    opponent_config = incumbent_mcts_config or mcts_config
     result = ArenaResult()
     seed_sequence = np.random.SeedSequence(config.seed)
     seeds = iter(seed_sequence.spawn(config.games))
@@ -157,14 +163,19 @@ def evaluate_candidate(
                 run_batched_search(
                     [game.tree for game in incumbent_games],
                     incumbent,
-                    mcts_config,
+                    opponent_config,
                     add_noise=False,
                     rngs=[game.rng for game in incumbent_games],
                 )
 
             finished: list[tuple[_ArenaGame, int | None, bool]] = []
             for game in games:
-                action = game.tree.select_action(0.0, game.rng)
+                mover_config = (
+                    mcts_config
+                    if game.tree.state.to_play == game.candidate_player
+                    else opponent_config
+                )
+                action = game.tree.select_action(0.0, game.rng, config=mover_config)
                 game.tree.advance(action)
                 state = game.tree.state
                 game.repetitions[state.position_key] += 1

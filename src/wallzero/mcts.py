@@ -34,6 +34,15 @@ class MCTSConfig:
     dirichlet_concentration: float | None = None
     root_policy_temperature: float = 1.0
     forced_playout_scale: float = 0.0
+    # Lower-confidence-bound move selection for deterministic (match) play.
+    lcb_selection: bool = False
+    lcb_z: float = 1.28
+    lcb_min_visit_fraction: float = 0.1
+    # Distance-margin utility: KataGo's score utility adapted to Quoridor, so
+    # the search prefers winning by a wider path margin instead of treating
+    # every win as equal. Rule-derived (BFS), zero human knowledge.
+    distance_utility_weight: float = 0.0
+    distance_utility_scale: float = 6.0
 
     def __post_init__(self) -> None:
         if self.simulations < 1:
@@ -46,6 +55,14 @@ class MCTSConfig:
             raise ValueError("root_policy_temperature must be positive")
         if self.forced_playout_scale < 0.0:
             raise ValueError("forced_playout_scale must be non-negative")
+        if self.lcb_z < 0.0:
+            raise ValueError("lcb_z must be non-negative")
+        if not 0.0 < self.lcb_min_visit_fraction <= 1.0:
+            raise ValueError("lcb_min_visit_fraction must be in (0, 1]")
+        if not 0.0 <= self.distance_utility_weight <= 1.0:
+            raise ValueError("distance_utility_weight must be between zero and one")
+        if self.distance_utility_scale <= 0.0:
+            raise ValueError("distance_utility_scale must be positive")
 
 
 @dataclass(slots=True)
@@ -54,11 +71,21 @@ class Node:
     prior: float = 1.0
     visit_count: int = 0
     value_sum: float = 0.0
+    value_sq_sum: float = 0.0
     children: dict[int, Node] | None = None
 
     @property
     def mean_value(self) -> float:
         return self.value_sum / self.visit_count if self.visit_count else 0.0
+
+    @property
+    def value_standard_error(self) -> float:
+        """Standard error of this node's backed-up value estimate."""
+        if self.visit_count < 2:
+            return 1.0
+        mean = self.value_sum / self.visit_count
+        variance = self.value_sq_sum / self.visit_count - mean * mean
+        return math.sqrt(max(variance, 0.0) / self.visit_count)
 
     @property
     def expanded(self) -> bool:
@@ -249,7 +276,39 @@ class SearchTree:
             policy[canonical_action(self.root.state, action)] = child.prior
         return policy
 
-    def select_action(self, temperature: float, rng: np.random.Generator) -> int:
+    def _lcb_action(self, config: MCTSConfig) -> int | None:
+        """Pick the root move with the best lower confidence bound.
+
+        Restricting to reasonably visited children keeps a barely explored
+        move with an accidentally flattering mean (and therefore a tiny
+        standard error) from winning the comparison.
+        """
+        children = self.root.children
+        if not children:
+            return None
+        top_visits = max(child.visit_count for child in children.values())
+        if top_visits < 2:
+            return None
+        threshold = max(2.0, config.lcb_min_visit_fraction * top_visits)
+        best_action: int | None = None
+        best_bound = -math.inf
+        for action, child in children.items():
+            if child.visit_count < threshold:
+                continue
+            # Child values are stored from the child's mover's perspective.
+            bound = -child.mean_value - config.lcb_z * child.value_standard_error
+            if bound > best_bound:
+                best_bound = bound
+                best_action = action
+        return best_action
+
+    def select_action(
+        self,
+        temperature: float,
+        rng: np.random.Generator,
+        *,
+        config: MCTSConfig | None = None,
+    ) -> int:
         if not self.root.children:
             raise ValueError("cannot select an action from an unexpanded root")
         actions = np.fromiter(self.root.children, dtype=np.int64)
@@ -258,6 +317,10 @@ class SearchTree:
             dtype=np.float64,
         )
         if temperature <= 1e-6:
+            if config is not None and config.lcb_selection:
+                lcb_action = self._lcb_action(config)
+                if lcb_action is not None:
+                    return lcb_action
             best = np.flatnonzero(visits == visits.max())
             return int(actions[int(rng.choice(best))])
         if not visits.any():
@@ -318,10 +381,28 @@ def _select_child(parent: Node, config: MCTSConfig) -> tuple[int, Node]:
 
 def _backup(path: list[Node], leaf_value: float) -> None:
     value = leaf_value
+    squared = leaf_value * leaf_value
     for node in reversed(path):
         node.visit_count += 1
         node.value_sum += value
+        node.value_sq_sum += squared
         value = -value
+
+
+def blended_leaf_value(state: State, value: float, config: MCTSConfig) -> float:
+    """Mix the exact path-distance margin into a network leaf value.
+
+    The margin is measured from the leaf mover's perspective: being closer to
+    goal than the opponent is positive. Both distances come from the rules
+    engine's shortest-path search, so this adds no learned or human knowledge.
+    """
+    weight = config.distance_utility_weight
+    if weight <= 0.0:
+        return value
+    own = state.shortest_distance(state.to_play)
+    opponent = state.shortest_distance(1 - state.to_play)
+    margin = math.tanh((opponent - own) / config.distance_utility_scale)
+    return (1.0 - weight) * value + weight * margin
 
 
 def _apply_virtual_loss(path: list[Node]) -> None:
@@ -331,12 +412,14 @@ def _apply_virtual_loss(path: list[Node]) -> None:
     for node in path:
         node.visit_count += 1
         node.value_sum += 1.0
+        node.value_sq_sum += 1.0
 
 
 def _revert_virtual_loss(path: list[Node]) -> None:
     for node in path:
         node.visit_count -= 1
         node.value_sum -= 1.0
+        node.value_sq_sum -= 1.0
 
 
 def run_batched_search(
@@ -396,7 +479,12 @@ def run_batched_search(
         for item, node_logits, value in zip(pending, logits, values, strict=True):
             _revert_virtual_loss(item.path)
             item.node.expand(node_logits)
-            _backup(item.path, float(value))
+            _backup(
+                item.path,
+                blended_leaf_value(
+                    item.node.materialized_state, float(value), config
+                ),
+            )
 
 
 class UniformEvaluator:
