@@ -24,3 +24,6 @@ artifacts/runs/a100-bootstrap/*
 
 # Accidental root-level staging (resume bundles are built in the scratchpad)
 /wallzero-output/
+
+# Over GitHub 100MB limit; sha256 recorded in campaign-manifest.json
+artifacts/runs/a100-bootstrap/best-r31-kata.pt

@@ -266,7 +266,8 @@
     "best.pt (round-7 promotion, superseded by r11 in round11+ bundles)": "2f3caf95dbdbd398e7c8bd8e85a24800da7e4e9d0ac41eab857bfcece2c5d500",
     "best.pt (round-2 era, superseded)": "56f704bee4f10e8eae0748b971e2055a01fe82c83a3f878f7a2abe0b77d421a9",
     "campaign-round26-kata.tar.gz": "02959bfc634ea8f2f53bc218ecba7fad1adf59215883e2bc475b7fd4e1cb71cd",
-    "campaign-round31-kata.tar.gz": "471d11d1082836741431c3daa03027895008959df17ce7fbc30d84c2a3ba9f25"
+    "campaign-round31-kata.tar.gz": "471d11d1082836741431c3daa03027895008959df17ce7fbc30d84c2a3ba9f25",
+    "best-r31-kata.pt (round-31 kata lineage, weights only)": "59c69fcae617c96ff1e7a4c0c727206f590288c5da95bee34490fc41ac7f97c0"
   },
   "incidents": [
     "Four Colab sessions died at the ~70-minute mark (headless runtime cap). Durable bundles limited each loss to at most one generation of regenerable chunks; the training state never regressed.",
@@ -274,5 +275,8 @@
     "macOS AppleDouble files in a locally built restore bundle crashed replay loading once; the loader now ignores hidden files and local tars use COPYFILE_DISABLE.",
     "wallzero5 adopted a 60-minute working window with mid-cycle bundling and proactive stop; it terminated cleanly."
   ],
-  "zero_human_data": true
+  "zero_human_data": true,
+  "release_tags": {
+    "v1.0-practice-coach": "user-tested 2026-07-25; serves best-gate-passed.pt (48c9b6b9...); userscript v1.11.0"
+  }
 }
