@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Wallz Practice Coach
 // @namespace    https://wallz.gg/
-// @version      1.10.0
+// @version      1.11.0
 // @description  Finds and optionally plays strong Wallz moves with adaptive local analysis and an optional local WallZero engine.
 // @author       Isaac Zhang
 // @match        https://wallz.gg/*
@@ -3963,6 +3963,7 @@
 			"<div class='controls'>",
 			"<button class='control primary' id='refresh' type='button'>Recalculate</button>",
 			"<button class='control autoplay' id='autoplay' type='button' aria-pressed='false' data-state='off' title='Play fresh engine recommendations automatically'>Autoplay · Off</button>",
+			"<button class='control wallzero' id='wallzero-toggle' type='button' aria-pressed='false' title='Toggle the local WallZero engine bridge'>WallZero · …</button>",
 			"<button class='control export' id='export-loss' type='button' disabled title='A local diagnostic report becomes available after a loss'>Export latest loss</button>",
 			"</div>",
 			"<p class='guard'>Autoplay stays off until armed · Alt+W to hide</p>",
@@ -3987,6 +3988,9 @@
 			),
 			refresh: /** @type {HTMLButtonElement} */ (
 				panel.querySelector("#refresh")
+			),
+			wallZeroToggle: /** @type {HTMLButtonElement} */ (
+				panel.querySelector("#wallzero-toggle")
 			),
 			collapse: /** @type {HTMLButtonElement} */ (
 				panel.querySelector("#collapse")
@@ -4038,6 +4042,9 @@
 			);
 		});
 		elements.refresh.addEventListener("click", actions.onRefresh);
+		elements.wallZeroToggle.addEventListener("click", () => {
+			actions.onWallZeroToggle?.();
+		});
 		elements.exportLoss.addEventListener("click", actions.onExportLoss);
 		elements.autoplay.addEventListener("click", () => {
 			actions.onAutoplayChange(
@@ -4048,6 +4055,13 @@
 		return {
 			hide() {
 				host.style.display = "none";
+			},
+			setWallZeroState(label, active) {
+				elements.wallZeroToggle.textContent = `WallZero · ${label}`;
+				elements.wallZeroToggle.setAttribute(
+					"aria-pressed",
+					active ? "true" : "false",
+				);
 			},
 			show() {
 				host.style.display = "block";
@@ -4963,7 +4977,45 @@
 			onHide() {
 				disableAutoplay("Autoplay was turned off when the coach was hidden.");
 			},
+			onWallZeroToggle() {
+				toggleWallZero();
+			},
 		});
+
+		function syncWallZeroButton() {
+			if (!panel) {
+				return;
+			}
+			if (!WALLZERO_BRIDGE_ENABLED) {
+				panel.setWallZeroState("Unavailable", false);
+				return;
+			}
+			if (!wallZeroUserEnabled()) {
+				panel.setWallZeroState("Off", false);
+				return;
+			}
+			panel.setWallZeroState(
+				wallZeroBridge.enabled ? "Connected" : "On · offline",
+				true,
+			);
+		}
+
+		function toggleWallZero() {
+			const next = !wallZeroUserEnabled();
+			setWallZeroUserEnabled(next);
+			if (next && WALLZERO_BRIDGE_ENABLED) {
+				void wallZeroBridge.probe().finally(() => {
+					syncWallZeroButton();
+					scheduleInspect(true);
+				});
+			} else {
+				wallZeroBridge.reportOutage(
+					new Error("wallzero-disabled: toggled off"),
+				);
+				scheduleInspect(true);
+			}
+			syncWallZeroButton();
+		}
 		panel.setLossExportAvailable(Boolean(latestLossReport));
 
 		function scheduleAutoplay(recommendation) {
@@ -5407,25 +5459,20 @@
 		);
 
 		if (WALLZERO_BRIDGE_ENABLED && wallZeroUserEnabled()) {
-			void wallZeroBridge.probe().finally(() => scheduleInspect(false));
+			void wallZeroBridge.probe().finally(() => {
+				syncWallZeroButton();
+				scheduleInspect(false);
+			});
 		} else {
+			syncWallZeroButton();
 			scheduleInspect(false);
 		}
 
 		document.addEventListener("keydown", (event) => {
-			if (!event.altKey || (event.key !== "w" && event.key !== "W")) {
+			if (!event.altKey || event.code !== "KeyW") {
 				return;
 			}
-			const next = !wallZeroUserEnabled();
-			setWallZeroUserEnabled(next);
-			if (next && WALLZERO_BRIDGE_ENABLED) {
-				void wallZeroBridge.probe().finally(() => scheduleInspect(true));
-			} else {
-				wallZeroBridge.reportOutage(
-					new Error("wallzero-disabled: toggled off with Alt+W"),
-				);
-				scheduleInspect(true);
-			}
+			toggleWallZero();
 		});
 	}
 
