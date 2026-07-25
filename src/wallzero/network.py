@@ -27,6 +27,7 @@ class NetworkConfig:
     action_size: int = ACTION_SIZE
     value_hidden: int = 256
     squeeze_excite_ratio: int = 8
+    distance_head: bool = False
 
 
 class SqueezeExcite(nn.Module):
@@ -101,6 +102,9 @@ class PolicyValueNet(nn.Module):
             nn.ReLU(inplace=True),
         )
         self.value_output = nn.Linear(config.value_hidden, 1)
+        self.distance_output = (
+            nn.Linear(config.value_hidden, 2) if config.distance_head else None
+        )
         self.apply(_initialize)
 
     def forward(self, inputs: Tensor) -> tuple[Tensor, Tensor]:
@@ -108,6 +112,19 @@ class PolicyValueNet(nn.Module):
         policy_logits = self.policy_head(features)
         value = torch.tanh(self.value_output(self.value_features(features)))
         return policy_logits, value.squeeze(-1)
+
+    def forward_train(self, inputs: Tensor) -> tuple[Tensor, Tensor, Tensor | None]:
+        """Forward pass that also yields auxiliary distance predictions."""
+        features = self.tower(self.stem(inputs))
+        policy_logits = self.policy_head(features)
+        value_features = self.value_features(features)
+        value = torch.tanh(self.value_output(value_features))
+        distances = (
+            self.distance_output(value_features)
+            if self.distance_output is not None
+            else None
+        )
+        return policy_logits, value.squeeze(-1), distances
 
 
 def _initialize(module: nn.Module) -> None:

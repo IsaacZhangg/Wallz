@@ -19,12 +19,19 @@ class TrainingExample:
     state: State
     policy: FloatArray
     value: float
+    # KataGo-style targets; defaults reproduce the original schema exactly.
+    policy_weight: float = 1.0
+    weight: float = 1.0
+    own_distance: int = -1
+    opp_distance: int = -1
 
     def __post_init__(self) -> None:
         if self.policy.shape != (ACTION_SIZE,):
             raise ValueError(f"invalid policy shape: {self.policy.shape}")
         if not -1.0 <= self.value <= 1.0:
             raise ValueError(f"invalid outcome: {self.value}")
+        if self.weight < 0.0 or not 0.0 <= self.policy_weight <= 1.0:
+            raise ValueError("invalid example weights")
 
 
 def save_shard(path: str | Path, examples: list[TrainingExample]) -> Path:
@@ -39,6 +46,10 @@ def save_shard(path: str | Path, examples: list[TrainingExample]) -> Path:
     ply = np.empty(count, dtype=np.uint16)
     policies = np.empty((count, ACTION_SIZE), dtype=np.float16)
     values = np.empty(count, dtype=np.int8)
+    policy_weights = np.empty(count, dtype=np.float16)
+    weights = np.empty(count, dtype=np.float16)
+    own_distances = np.empty(count, dtype=np.int16)
+    opp_distances = np.empty(count, dtype=np.int16)
     for index, example in enumerate(examples):
         state = example.state
         pawns[index] = state.pawns
@@ -49,9 +60,17 @@ def save_shard(path: str | Path, examples: list[TrainingExample]) -> Path:
         ply[index] = state.ply
         policies[index] = example.policy
         values[index] = round(example.value)
+        policy_weights[index] = example.policy_weight
+        weights[index] = example.weight
+        own_distances[index] = example.own_distance
+        opp_distances[index] = example.opp_distance
     np.savez_compressed(
         destination,
-        schema=np.array("wallzero.replay.v1"),
+        schema=np.array("wallzero.replay.v2"),
+        policy_weights=policy_weights,
+        weights=weights,
+        own_distances=own_distances,
+        opp_distances=opp_distances,
         pawns=pawns,
         remaining=remaining,
         horizontal=horizontal,
@@ -67,8 +86,10 @@ def save_shard(path: str | Path, examples: list[TrainingExample]) -> Path:
 def load_shard(path: str | Path) -> list[TrainingExample]:
     source = Path(path)
     with np.load(source, allow_pickle=False) as data:
-        if str(data["schema"]) != "wallzero.replay.v1":
+        schema = str(data["schema"])
+        if schema not in ("wallzero.replay.v1", "wallzero.replay.v2"):
             raise ValueError(f"unsupported replay schema in {source}")
+        second = schema == "wallzero.replay.v2"
         examples = []
         for index in range(len(data["values"])):
             pawn_row = data["pawns"][index]
@@ -81,11 +102,25 @@ def load_shard(path: str | Path) -> list[TrainingExample]:
                 to_play=int(data["to_play"][index]),
                 ply=int(data["ply"][index]),
             )
+            if second:
+                policy_weight = float(data["policy_weights"][index])
+                weight = float(data["weights"][index])
+                own_distance = int(data["own_distances"][index])
+                opp_distance = int(data["opp_distances"][index])
+            else:
+                policy_weight = 1.0
+                weight = 1.0
+                own_distance = state.shortest_distance(state.to_play)
+                opp_distance = state.shortest_distance(1 - state.to_play)
             examples.append(
                 TrainingExample(
                     state=state,
                     policy=data["policies"][index].astype(np.float32),
                     value=float(data["values"][index]),
+                    policy_weight=policy_weight,
+                    weight=weight,
+                    own_distance=own_distance,
+                    opp_distance=opp_distance,
                 )
             )
     return examples

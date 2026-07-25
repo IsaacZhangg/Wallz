@@ -54,6 +54,12 @@ targeting the actual game:
 - color-balanced arena gates with paired uniform-random openings: both games
   of a color pair start from the same rule-derived random prefix, so the gate
   measures the models rather than one deterministic trajectory;
+- KataGo's self-play efficiency package (see `docs/katago-adaptations.md`):
+  playout cap randomization, forced playouts with policy target pruning,
+  shaped Dirichlet noise, root policy softmax temperature, policy surprise
+  weighting, exact shortest-path distance auxiliary targets (the ownership
+  analog), and gateless training rounds — all opt-in, with defaults that
+  reproduce the original pipeline bit-for-bit;
 - an independent strength-evaluation module (`wallzero.evaluation`) reporting
   Wilson 95% intervals, kept separate from the promotion gate;
 - a versioned JSON analysis protocol for the eventual userscript bridge.

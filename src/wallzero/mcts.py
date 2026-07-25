@@ -30,6 +30,10 @@ class MCTSConfig:
     dirichlet_fraction: float = 0.25
     max_plies: int = MAX_GAME_PLIES
     leaf_batch: int = 1
+    # KataGo-style knobs; defaults preserve the original search exactly.
+    dirichlet_concentration: float | None = None
+    root_policy_temperature: float = 1.0
+    forced_playout_scale: float = 0.0
 
     def __post_init__(self) -> None:
         if self.simulations < 1:
@@ -38,6 +42,10 @@ class MCTSConfig:
             raise ValueError("dirichlet_fraction must be between zero and one")
         if self.leaf_batch < 1:
             raise ValueError("leaf_batch must be positive")
+        if self.root_policy_temperature <= 0.0:
+            raise ValueError("root_policy_temperature must be positive")
+        if self.forced_playout_scale < 0.0:
+            raise ValueError("forced_playout_scale must be non-negative")
 
 
 @dataclass(slots=True)
@@ -116,11 +124,77 @@ class SearchTree:
         if self._noise_applied or not self.root.children:
             return
         children = list(self.root.children.values())
-        noise = rng.dirichlet(np.full(len(children), config.dirichlet_alpha))
+        if config.root_policy_temperature != 1.0:
+            # A restoring force toward uniform among similarly valued moves
+            # (KataGo/SAI root policy softmax temperature), root only.
+            powered = np.array(
+                [child.prior for child in children], dtype=np.float64
+            ) ** (1.0 / config.root_policy_temperature)
+            powered /= powered.sum()
+            for child, prior in zip(children, powered, strict=True):
+                child.prior = float(prior)
+        alpha = (
+            config.dirichlet_concentration / len(children)
+            if config.dirichlet_concentration is not None
+            else config.dirichlet_alpha
+        )
+        noise = rng.dirichlet(np.full(len(children), alpha))
         fraction = config.dirichlet_fraction
         for child, sample in zip(children, noise, strict=True):
             child.prior = (1.0 - fraction) * child.prior + fraction * float(sample)
         self._noise_applied = True
+
+    def _forced_child(self, config: MCTSConfig) -> tuple[int, Node] | None:
+        """Return a root child owed forced playouts (KataGo forced playouts)."""
+        if config.forced_playout_scale <= 0.0 or not self._noise_applied:
+            return None
+        children = self.root.children
+        if not children:
+            return None
+        total = sum(child.visit_count for child in children.values())
+        if total <= 0:
+            return None
+        best: tuple[int, Node] | None = None
+        best_deficit = 0.0
+        for action, child in children.items():
+            forced = math.sqrt(config.forced_playout_scale * child.prior * total)
+            deficit = forced - child.visit_count
+            if deficit > best_deficit:
+                best_deficit = deficit
+                best = (action, child)
+        return best
+
+    def pruned_policy(self, config: MCTSConfig) -> FloatArray:
+        """Visit-count policy with forced playouts subtracted (target pruning).
+
+        The most-visited child keeps its full count; every other child loses
+        up to its forced-playout allotment so Dirichlet-driven exploration
+        does not contaminate the recorded training target.
+        """
+        policy = np.zeros(ACTION_SIZE, dtype=np.float32)
+        state = self.root.materialized_state
+        children = self.root.children
+        if not children:
+            return policy
+        if config.forced_playout_scale <= 0.0:
+            return self.policy()
+        total = sum(child.visit_count for child in children.values())
+        if total <= 0:
+            return self.policy()
+        top_action = max(children, key=lambda action: children[action].visit_count)
+        pruned: dict[int, float] = {}
+        for action, child in children.items():
+            if action == top_action:
+                pruned[action] = float(child.visit_count)
+                continue
+            forced = math.sqrt(config.forced_playout_scale * child.prior * total)
+            kept = max(0.0, child.visit_count - forced)
+            if kept >= 1.0:
+                pruned[action] = kept
+        norm = sum(pruned.values())
+        for action, count in pruned.items():
+            policy[canonical_action(state, action)] = count / norm
+        return policy
 
     def select_leaf(self, config: MCTSConfig) -> PendingEvaluation | None:
         node = self.root
@@ -144,7 +218,10 @@ class SearchTree:
             if not node.children:
                 _backup(path, 0.0)
                 return None
-            action, child = _select_child(node, config)
+            forced = self._forced_child(config) if node is self.root else None
+            action, child = (
+                forced if forced is not None else _select_child(node, config)
+            )
             if child.state is None:
                 child.state = node.state.play(action, validate=False)
             node = child

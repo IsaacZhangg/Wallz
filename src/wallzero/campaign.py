@@ -80,6 +80,12 @@ def run_self_play_chunk(
     endgame_temperature: float | None = None,
     workers: int = 1,
     leaf_batch: int | None = None,
+    full_search_probability: float = 1.0,
+    fast_simulations: int | None = None,
+    surprise_weighting: bool = False,
+    forced_playout_scale: float | None = None,
+    root_policy_temperature: float | None = None,
+    dirichlet_concentration: float | None = None,
     device_name: str = "auto",
 ) -> Path:
     """Generate and fsync one replay shard before returning control.
@@ -116,6 +122,9 @@ def run_self_play_chunk(
         ),
         repetition_limit=max(config.self_play.repetition_limit, 8),
         seed=config.self_play.seed + chunk_index,
+        full_search_probability=full_search_probability,
+        fast_simulations=fast_simulations,
+        surprise_weighting=surprise_weighting,
     )
     mcts_config = (
         config.self_play_mcts
@@ -124,6 +133,16 @@ def run_self_play_chunk(
     )
     if leaf_batch is not None:
         mcts_config = replace(mcts_config, leaf_batch=leaf_batch)
+    if forced_playout_scale is not None:
+        mcts_config = replace(mcts_config, forced_playout_scale=forced_playout_scale)
+    if root_policy_temperature is not None:
+        mcts_config = replace(
+            mcts_config, root_policy_temperature=root_policy_temperature
+        )
+    if dirichlet_concentration is not None:
+        mcts_config = replace(
+            mcts_config, dirichlet_concentration=dirichlet_concentration
+        )
     started = time.monotonic()
     _emit(
         "self-play-start",
@@ -186,6 +205,7 @@ def run_training_round(
     arena_simulations: int | None = None,
     arena_workers: int = 1,
     candidate_network: NetworkConfig | None = None,
+    warm_start: bool = False,
     device_name: str = "auto",
 ) -> Path:
     """Train one candidate from durable shards, then gate it in the arena.
@@ -222,6 +242,10 @@ def run_training_round(
     else:
         torch.manual_seed(train_config.seed)
         candidate = PolicyValueNet(candidate_network)
+        if warm_start:
+            # Adopt every architecturally compatible weight from the incumbent
+            # (e.g. adding auxiliary heads keeps the whole trunk).
+            candidate.load_state_dict(best_model.state_dict(), strict=False)
     _emit(
         "training-start",
         {
@@ -248,6 +272,44 @@ def run_training_round(
         },
     )
     _emit("training-complete", {"round": round_index, **asdict(train_metrics)})
+
+    if arena_games == 0:
+        # Gateless mode (AlphaZero-style): always adopt the latest candidate;
+        # strength judgments belong to the independent evaluation suites.
+        save_checkpoint(
+            best_path,
+            candidate,
+            optimizer=optimizer,
+            metadata={
+                "status": "promoted-gateless",
+                "round": round_index,
+                "zero_human_data": True,
+            },
+        )
+        metric = {
+            "schema": "wallzero.round-metrics.v1",
+            "round": round_index,
+            "candidate_network": asdict(candidate.config),
+            "scale_up": candidate_network is not None,
+            "training": asdict(train_metrics),
+            "arena": None,
+            "replay_samples": len(replay),
+            "promoted": True,
+            "gateless": True,
+            "zero_human_data": True,
+        }
+        _append_json(output_dir / "round-metrics.jsonl", metric)
+        _atomic_json(
+            state_path,
+            {
+                "schema": "wallzero.campaign-state.v1",
+                "completed_rounds": round_index + 1,
+                "last_candidate": str(candidate_path),
+                "last_promoted": True,
+            },
+        )
+        _emit("round-complete-gateless", metric)
+        return best_path
 
     arena_config = replace(
         config.arena,
