@@ -34,6 +34,16 @@ setting differs; free to run locally).
 | --- | --- | --- |
 | LCB move selection | `MCTSConfig.lcb_selection` picks the root child maximizing `-mean - z*stderr` among children with at least 10% of the top visit count; per-node variance tracked through virtual loss | 0.475 over 40 games (exploratory), neutral |
 | Score utility | `MCTSConfig.distance_utility_weight` mixes `tanh((opp_dist - own_dist)/scale)` into leaf values — exact BFS margins, the Quoridor analog of KataGo's score utility | Weight 0.10 scored 0.6125 at 40 games, but a pre-declared 3-seed x 200-game confirmation pooled to **0.4975, 95% CI [0.4576, 0.5374]** — the exploratory result was noise |
+| Subtree value bias correction | `MCTSConfig.subtree_bias_lambda` buckets nodes by their `(previous action, action)` pair, tracks each node's observed error (raw network value minus its own subtree average), maintains a visit-weighted average per bucket (contributions replaced, not accumulated, as in KataGo), and subtracts `lambda * bias` from later leaf values in the same bucket | λ=0.35 scored 0.35 and λ=0.60 scored 0.5625 over 40 games each — no positive signal, so no confirmation run was spent. See the caveat below |
+
+**Caveat on the bias-correction result.** KataGo buckets by the 5x5 stone
+pattern around the last move, which genuinely identifies "the same local
+tactic" recurring elsewhere in the tree. The Quoridor port buckets only by the
+last two actions, which may not identify the same tactic at all, because a
+wall's effect depends on the whole board. The neutral measurement is therefore
+evidence about *this bucketing*, not about the technique. The refinement worth
+trying before dismissing it is a bucket key that includes the local wall
+pattern around the last move and the mover's distance bracket.
 
 The lesson is the same one the campaign learned in training: 40-game samples
 cannot distinguish a real effect from noise, and every promising exploratory
@@ -41,30 +51,26 @@ result must survive a pre-declared multi-seed design before it is believed.
 
 ## Identified, not yet implemented (ranked)
 
-1. **Subtree value bias correction** (~30-60 Elo in KataGo): online correction
-   of correlated NN evaluation errors, bucketed by local pattern of recent
-   moves. Quoridor bucket analog: last wall placement + local wall pattern.
-   Search-only change; moderate complexity.
-2. **Uncertainty-weighted MCTS playouts + short-term value targets**: needs an
+1. **Uncertainty-weighted MCTS playouts + short-term value targets**: needs an
    extra head predicting near-term value error; pairs with dynamic
    variance-scaled cPUCT.
-3. **Opponent-next-move auxiliary policy head**: modest paper gains; deferred
+2. **Opponent-next-move auxiliary policy head**: modest paper gains; deferred
    because the current-player canonical frame makes the target subtle to get
    right, and a bug here poisons training silently.
-4. **Soft resignation**: value-threshold truncation of hopeless games with
+3. **Soft resignation**: value-threshold truncation of hopeless games with
    low-weight fast finishes; our wall-free solver adjudication already covers
    part of this — remaining benefit is midgame truncation.
-5. **Optimistic policy / auxiliary soft policy**: later-KataGo refinements,
+4. **Optimistic policy / auxiliary soft policy**: later-KataGo refinements,
    evaluate after the core recipe proves itself.
-6. **Batch-norm-free architecture (fixed-variance init, one BN)**: 1.6-1.8x
+5. **Batch-norm-free architecture (fixed-variance init, one BN)**: 1.6-1.8x
    faster training steps and cleaner multi-device behavior; an architecture
    migration to schedule alongside the next scale-up.
-7. **Fork-position curriculum**: start a fraction of self-play games from
+6. **Fork-position curriculum**: start a fraction of self-play games from
    positions sampled out of recent replay (self-generated, rule-derived) for
    opening diversity beyond temperature.
-8. **Nested bottleneck residual blocks**: KataGo's current architecture family;
+7. **Nested bottleneck residual blocks**: KataGo's current architecture family;
    relevant at the next capacity jump, not at 30M.
-9. **Multi-board-size masking**: not applicable — Quoridor is fixed 9x9.
+8. **Multi-board-size masking**: not applicable — Quoridor is fixed 9x9.
 
 ## First kata-recipe campaign scripts
 

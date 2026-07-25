@@ -4,3 +4,5 @@
 {"variant":"distance_utility_weight=0.20","games":40,"score":0.4625,"ci95":[0.3182,0.6134],"verdict":"neutral"}
 {"variant":"distance_utility_weight=0.35","games":40,"score":0.5625,"ci95":[0.4101,0.704],"verdict":"neutral"}
 {"variant":"distance_utility_weight=0.10","design":"pre-declared 3 seeds x 200 games, pooled","seeds":[91101,91202,91303],"per_seed":[0.4875,0.495,0.51],"games":600,"score":0.4975,"ci95":[0.4576,0.5374],"verdict":"NOT ESTABLISHED - the exploratory 0.6125 was noise"}
+{"variant":"subtree_bias_lambda=0.35","games":40,"score":0.35,"ci95":[0.2213,0.5049],"verdict":"no positive signal"}
+{"variant":"subtree_bias_lambda=0.60","games":40,"score":0.5625,"ci95":[0.4101,0.704],"verdict":"no positive signal; non-monotonic with 0.35 => noise"}

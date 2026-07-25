@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -133,3 +135,69 @@ def test_distance_utility_changes_backed_up_values() -> None:
     # only come from the distance-margin term.
     assert plain_tree.root.value_sum == pytest.approx(0.0, abs=1e-9)
     assert shaped_tree.root.value_sum != pytest.approx(0.0, abs=1e-9)
+
+
+def test_subtree_bias_rejects_invalid_settings() -> None:
+    with pytest.raises(ValueError):
+        MCTSConfig(subtree_bias_lambda=-0.1)
+    with pytest.raises(ValueError):
+        MCTSConfig(subtree_bias_alpha=-1.0)
+
+
+def test_subtree_bias_learns_buckets_and_keeps_the_budget_exact() -> None:
+    config = MCTSConfig(
+        simulations=200,
+        max_plies=64,
+        leaf_batch=8,
+        subtree_bias_lambda=0.35,
+        subtree_bias_alpha=0.8,
+    )
+    tree = SearchTree.from_state(State.initial())
+    run_batched_search(
+        [tree],
+        UniformEvaluator(),
+        config,
+        add_noise=False,
+        rngs=[np.random.default_rng(19)],
+    )
+    assert tree.root.visit_count == 200
+    # Local patterns were observed and their weights stay positive and finite.
+    assert tree._bias
+    for error_sum, weight in tree._bias.values():
+        assert weight > 0.0
+        assert math.isfinite(error_sum)
+        assert abs(error_sum / weight) <= 2.0
+
+
+def test_subtree_bias_is_inert_when_disabled() -> None:
+    off = MCTSConfig(simulations=64, max_plies=48, leaf_batch=4)
+    tree = SearchTree.from_state(State.initial())
+    run_batched_search(
+        [tree],
+        UniformEvaluator(),
+        off,
+        add_noise=False,
+        rngs=[np.random.default_rng(23)],
+    )
+    assert tree._bias == {}
+    assert tree.bucket_bias((3, 4)) == 0.0
+
+
+def test_bucket_bias_reports_the_weighted_average_error() -> None:
+    tree = SearchTree.from_state(State.initial())
+    config = MCTSConfig(subtree_bias_lambda=0.35, subtree_bias_alpha=1.0)
+    node = Node(state=None, prior=1.0)
+    node.bucket = (5, 9)
+    # The network said +0.6 while the subtree averaged -0.4 over four visits.
+    node.nn_value = 0.6
+    node.own_value = 0.6
+    node.visit_count = 5
+    node.value_sum = 0.6 + 4 * -0.4
+    tree.update_bias([node], config)
+    assert tree.bucket_bias((5, 9)) == pytest.approx(1.0, abs=1e-9)
+
+    # A later, deeper observation replaces rather than compounds the estimate.
+    node.visit_count = 9
+    node.value_sum = 0.6 + 8 * 0.6
+    tree.update_bias([node], config)
+    assert tree.bucket_bias((5, 9)) == pytest.approx(0.0, abs=1e-9)

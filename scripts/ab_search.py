@@ -48,6 +48,8 @@ def main() -> None:
     parser.add_argument("--lcb", action="store_true")
     parser.add_argument("--distance-weight", type=float, default=0.0)
     parser.add_argument("--distance-scale", type=float, default=6.0)
+    parser.add_argument("--subtree-bias", type=float, default=0.0)
+    parser.add_argument("--subtree-alpha", type=float, default=0.8)
     args = parser.parse_args()
 
     device = select_device(args.device)
@@ -64,6 +66,8 @@ def main() -> None:
         lcb_selection=args.lcb,
         distance_utility_weight=args.distance_weight,
         distance_utility_scale=args.distance_scale,
+        subtree_bias_lambda=args.subtree_bias,
+        subtree_bias_alpha=args.subtree_alpha,
     )
 
     started = time.monotonic()
@@ -90,6 +94,7 @@ def main() -> None:
                 "variant": {
                     "lcb_selection": args.lcb,
                     "distance_utility_weight": args.distance_weight,
+                    "subtree_bias_lambda": args.subtree_bias,
                 },
                 "games": result.games,
                 "variant_wins": result.candidate_wins,

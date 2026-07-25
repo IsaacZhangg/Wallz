@@ -43,6 +43,11 @@ class MCTSConfig:
     # every win as equal. Rule-derived (BFS), zero human knowledge.
     distance_utility_weight: float = 0.0
     distance_utility_scale: float = 6.0
+    # Subtree value bias correction: online correction of the network's
+    # systematic evaluation error for recurring local move patterns, learned
+    # within a single search from its own deeper results.
+    subtree_bias_lambda: float = 0.0
+    subtree_bias_alpha: float = 0.8
 
     def __post_init__(self) -> None:
         if self.simulations < 1:
@@ -63,6 +68,10 @@ class MCTSConfig:
             raise ValueError("distance_utility_weight must be between zero and one")
         if self.distance_utility_scale <= 0.0:
             raise ValueError("distance_utility_scale must be positive")
+        if self.subtree_bias_lambda < 0.0:
+            raise ValueError("subtree_bias_lambda must be non-negative")
+        if self.subtree_bias_alpha < 0.0:
+            raise ValueError("subtree_bias_alpha must be non-negative")
 
 
 @dataclass(slots=True)
@@ -73,6 +82,14 @@ class Node:
     value_sum: float = 0.0
     value_sq_sum: float = 0.0
     children: dict[int, Node] | None = None
+    # Subtree bias bookkeeping: the raw network value for this node, the value
+    # actually credited to it, and the (previous action, action) pair naming
+    # the local pattern that reached it.
+    nn_value: float = 0.0
+    own_value: float = 0.0
+    bucket: tuple[int, int] | None = None
+    bias_error_sum: float = 0.0
+    bias_weight: float = 0.0
 
     @property
     def mean_value(self) -> float:
@@ -132,12 +149,16 @@ class Node:
 class PendingEvaluation:
     node: Node
     path: list[Node]
+    tree: SearchTree | None = None
 
 
 @dataclass(slots=True)
 class SearchTree:
     root: Node
     _noise_applied: bool = field(default=False, init=False)
+    _bias: dict[tuple[int, int], list[float]] = field(
+        default_factory=dict, init=False
+    )
 
     @classmethod
     def from_state(cls, state: State) -> SearchTree:
@@ -241,7 +262,7 @@ class SearchTree:
                 _backup(path, outcome * magnitude)
                 return None
             if not node.expanded:
-                return PendingEvaluation(node=node, path=path)
+                return PendingEvaluation(node=node, path=path, tree=self)
             if not node.children:
                 _backup(path, 0.0)
                 return None
@@ -251,6 +272,7 @@ class SearchTree:
             )
             if child.state is None:
                 child.state = node.state.play(action, validate=False)
+                child.bucket = (node.bucket[1] if node.bucket else -1, action)
             node = child
             path.append(child)
             key = child.state.position_key
@@ -258,6 +280,38 @@ class SearchTree:
                 _backup(path, 0.0)
                 return None
             seen.add(key)
+
+    def bucket_bias(self, bucket: tuple[int, int] | None) -> float:
+        """Weighted average evaluation error observed for this local pattern."""
+        if bucket is None:
+            return 0.0
+        entry = self._bias.get(bucket)
+        if entry is None or entry[1] <= 0.0:
+            return 0.0
+        return entry[0] / entry[1]
+
+    def update_bias(self, path: list[Node], config: MCTSConfig) -> None:
+        """Refresh each path node's contribution to its pattern's bias.
+
+        A node's observed error is its raw network value minus the average its
+        own subtree reports, which deeper search makes the better estimate.
+        Contributions are replaced rather than accumulated so a bucket stays a
+        weighted average over nodes, as in KataGo.
+        """
+        if config.subtree_bias_lambda <= 0.0:
+            return
+        for node in path:
+            if node.bucket is None or node.visit_count < 2:
+                continue
+            child_visits = node.visit_count - 1
+            children_average = (node.value_sum - node.own_value) / child_visits
+            observed_error = node.nn_value - children_average
+            weight = float(child_visits) ** config.subtree_bias_alpha
+            entry = self._bias.setdefault(node.bucket, [0.0, 0.0])
+            entry[0] += observed_error * weight - node.bias_error_sum
+            entry[1] += weight - node.bias_weight
+            node.bias_error_sum = observed_error * weight
+            node.bias_weight = weight
 
     def policy(self) -> FloatArray:
         policy = np.zeros(ACTION_SIZE, dtype=np.float32)
@@ -479,12 +533,20 @@ def run_batched_search(
         for item, node_logits, value in zip(pending, logits, values, strict=True):
             _revert_virtual_loss(item.path)
             item.node.expand(node_logits)
-            _backup(
-                item.path,
-                blended_leaf_value(
-                    item.node.materialized_state, float(value), config
-                ),
+            raw = blended_leaf_value(
+                item.node.materialized_state, float(value), config
             )
+            credited = raw
+            if config.subtree_bias_lambda > 0.0 and item.tree is not None:
+                bias = item.tree.bucket_bias(item.node.bucket)
+                credited = min(
+                    1.0, max(-1.0, raw - config.subtree_bias_lambda * bias)
+                )
+            item.node.nn_value = raw
+            item.node.own_value = credited
+            _backup(item.path, credited)
+            if item.tree is not None:
+                item.tree.update_bias(item.path, config)
 
 
 class UniformEvaluator:

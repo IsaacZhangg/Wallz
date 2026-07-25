@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -68,6 +69,50 @@ def _ensure_best(output: Path, config: RunConfig) -> Path:
         },
     )
     return best
+
+
+class _GpuSampler:
+    """Sample GPU utilization in the background so throughput claims are real.
+
+    Silently degrades to no measurement when the driver query is unavailable,
+    since this is instrumentation and must never fail a training run.
+    """
+
+    def __init__(self, device: torch.device, interval: float = 5.0) -> None:
+        self.device = device
+        self.interval = interval
+        self.samples: list[int] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> _GpuSampler:
+        if self.device.type != "cuda":
+            return self
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                self.samples.append(int(torch.cuda.utilization(self.device)))
+            except Exception:
+                return
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+
+    def report(self) -> dict[str, float | int] | None:
+        if not self.samples:
+            return None
+        return {
+            "samples": len(self.samples),
+            "mean_percent": round(sum(self.samples) / len(self.samples), 1),
+            "max_percent": max(self.samples),
+            "min_percent": min(self.samples),
+        }
 
 
 def run_self_play_chunk(
@@ -160,21 +205,22 @@ def run_self_play_chunk(
         _emit("self-play-progress", {"chunk": chunk_index, **asdict(stats)})
 
     evaluator = TorchEvaluator(model, device)
-    if workers > 1:
-        examples, stats = generate_self_play_parallel(
-            evaluator.evaluate_planes,
-            mcts_config,
-            self_play_config,
-            workers=workers,
-            progress=report,
-        )
-    else:
-        examples, stats = generate_self_play(
-            evaluator,
-            mcts_config,
-            self_play_config,
-            progress=report,
-        )
+    with _GpuSampler(device) as sampler:
+        if workers > 1:
+            examples, stats = generate_self_play_parallel(
+                evaluator.evaluate_planes,
+                mcts_config,
+                self_play_config,
+                workers=workers,
+                progress=report,
+            )
+        else:
+            examples, stats = generate_self_play(
+                evaluator,
+                mcts_config,
+                self_play_config,
+                progress=report,
+            )
     shard = replay_dir / f"chunk-{chunk_index:05d}.npz"
     save_shard(shard, examples)
     metric = {
@@ -186,6 +232,7 @@ def run_self_play_chunk(
         "workers": workers,
         "leaf_batch": mcts_config.leaf_batch,
         "device": str(device),
+        "gpu_utilization": sampler.report(),
         "self_play": asdict(stats),
         "examples": len(examples),
         "elapsed_seconds": time.monotonic() - started,
