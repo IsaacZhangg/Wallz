@@ -195,6 +195,24 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-26 overnight)
+
+First full night of the free-fleet flywheel: rounds 32-35 trained, adopted,
+and secured (all gateless, 3,000 steps on the 60K window; 52-56 min each on
+the GTX 1080), while the fleet generated **91,868 fresh kata positions** —
+45,213 from the PC (9 chunks at 4.27 pos/s after the bf16 fix below) and
+46,655 from the Mac (10 chunks via a single-process MPS loop; the
+multiprocess self-play path deadlocks on MPS and must not be used there).
+Mac shards are renumbered into the PC replay sequence at each pre-training
+pause. Sanity matches (40 games, 192 sims, paired openings — sanity checks,
+not strength claims): r32 vs r31 0.525 [0.375, 0.671]; r35 vs r31 0.500
+[0.352, 0.648]. Flat short-horizon sanity results are the expected shape
+under the data-volume hypothesis; the decisive pre-declared test
+(docs/data-volume-test.md) triggers at >=1M fresh positions (~9% there
+after one night). Round times: r32 55.9 min, r33 52.2 (cuDNN autotune
+active), r34 103 (an accidental duplicate launch halved throughput — same
+seed, so artifacts were identical and unharmed), r35 52.3.
+
 ## Recorded status (2026-07-25)
 
 The KataGo-recipe campaign (rounds 25-31: playout cap randomization, forced
