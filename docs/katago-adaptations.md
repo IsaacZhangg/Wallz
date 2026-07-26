@@ -36,14 +36,17 @@ setting differs; free to run locally).
 | Score utility | `MCTSConfig.distance_utility_weight` mixes `tanh((opp_dist - own_dist)/scale)` into leaf values — exact BFS margins, the Quoridor analog of KataGo's score utility | Weight 0.10 scored 0.6125 at 40 games, but a pre-declared 3-seed x 200-game confirmation pooled to **0.4975, 95% CI [0.4576, 0.5374]** — the exploratory result was noise |
 | Subtree value bias correction | `MCTSConfig.subtree_bias_lambda` buckets nodes by their `(previous action, action)` pair, tracks each node's observed error (raw network value minus its own subtree average), maintains a visit-weighted average per bucket (contributions replaced, not accumulated, as in KataGo), and subtracts `lambda * bias` from later leaf values in the same bucket | λ=0.35 scored 0.35 and λ=0.60 scored 0.5625 over 40 games each — no positive signal, so no confirmation run was spent. See the caveat below |
 
-**Caveat on the bias-correction result.** KataGo buckets by the 5x5 stone
-pattern around the last move, which genuinely identifies "the same local
-tactic" recurring elsewhere in the tree. The Quoridor port buckets only by the
-last two actions, which may not identify the same tactic at all, because a
-wall's effect depends on the whole board. The neutral measurement is therefore
-evidence about *this bucketing*, not about the technique. The refinement worth
-trying before dismissing it is a bucket key that includes the local wall
-pattern around the last move and the mover's distance bracket.
+**The bias-correction result held up under the refined bucketing too.** The
+first port bucketed only by the last two actions, which arguably does not
+identify "the same local tactic" at all, so the neutral result carried a
+caveat. The refinement replaced the key with `bias_bucket()` — (action, 3x3
+local wall pattern around the move read from the resulting position, mover's
+exact-BFS distance bracket), the faithful analog of KataGo's 5x5 stone
+pattern. Measured 2026-07-25: **0.425 [0.285, 0.578] at both lambda=0.35 and
+lambda=0.60** over 40 games each, with game-by-game outcomes identical across
+the two lambdas — the corrections almost never changed a move choice. The
+technique is now considered fairly tested at this scale and shelved; the
+refined bucketing remains in the code behind the same default-off flag.
 
 The lesson is the same one the campaign learned in training: 40-game samples
 cannot distinguish a real effect from noise, and every promising exploratory

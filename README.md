@@ -195,6 +195,33 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-25)
+
+The KataGo-recipe campaign (rounds 25-31: playout cap randomization, forced
+playouts with pruned policy targets, shaped Dirichlet, surprise weighting,
+exact-BFS distance head, gateless rounds) moved the classical-engine KPI off
+zero for the first time: 0.05 (0-18-2) at an 800-simulation budget. Three
+plateau hypotheses were then falsified by measurement — legacy-data dilution
+(kata-only retrain scored exactly 0.500), per-round overtraining (a
+KataGo-norm 600-step round was *underfit* and scored 0.475), and weak search
+(LCB selection, distance-margin utility, and subtree value bias correction
+all measured neutral, the last under both a crude and a faithful
+pattern-based bucketing; all remain config-gated, default off). The surviving
+hypothesis is **data volume**, and `docs/data-volume-test.md` pre-declares
+the week-scale test with supported/falsified criteria fixed in advance.
+
+Compute now runs as a three-node fleet: an always-on GTX 1080 generation
+node (`scripts/node_chunk_kata.py` under a watchdogged loop — after a silent
+CUDA stall wedged a chunk for hours at "100% utilization" and near-idle
+power draw, the loop kills anything under 80W for 15 minutes or over 3h
+total), the M4 Pro for free A/B and evaluation (`scripts/ab_search.py`), and
+Colab A100 reserved for the pre-declared evaluation suites. The 1080 also
+closes the training loop: a full 3,000-step round of the 30M network takes
+~53-57 min (`scripts/node_train_bench.py`; torch's bf16-"support" on Pascal
+is emulation, 9.6x slower, now gated off by compute capability in
+`training.py`), so generate → train → adopt runs entirely on free hardware
+with round 32 the first PC-trained round.
+
 ## Recorded status (2026-07-24)
 
 A durable A100 campaign (`artifacts/runs/a100-bootstrap/`) has completed

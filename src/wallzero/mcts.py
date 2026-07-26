@@ -9,9 +9,16 @@ from typing import Protocol
 import numpy as np
 from numpy.typing import NDArray
 
-from wallzero.constants import ACTION_SIZE, MAX_GAME_PLIES
+from wallzero.constants import ACTION_SIZE, MAX_GAME_PLIES, WALL_GRID_SIZE
 from wallzero.encoding import canonical_action
-from wallzero.game import State, exact_pawn_race
+from wallzero.game import (
+    State,
+    coordinates,
+    decode_action,
+    exact_pawn_race,
+    wall_coordinates,
+    wall_index,
+)
 
 FloatArray = NDArray[np.float32]
 
@@ -83,11 +90,11 @@ class Node:
     value_sq_sum: float = 0.0
     children: dict[int, Node] | None = None
     # Subtree bias bookkeeping: the raw network value for this node, the value
-    # actually credited to it, and the (previous action, action) pair naming
-    # the local pattern that reached it.
+    # actually credited to it, and the (action, local wall pattern, distance
+    # bracket) key naming the local pattern that reached it.
     nn_value: float = 0.0
     own_value: float = 0.0
-    bucket: tuple[int, int] | None = None
+    bucket: tuple[int, ...] | None = None
     bias_error_sum: float = 0.0
     bias_weight: float = 0.0
 
@@ -145,6 +152,40 @@ class Node:
         }
 
 
+def bias_bucket(state: State, action: int) -> tuple[int, int, int]:
+    """Name the local pattern an action created, for subtree bias sharing.
+
+    KataGo buckets by the 5x5 stone pattern around the last move so that the
+    same local tactic recurring elsewhere in the tree shares one bias entry.
+    The Quoridor analog: the action itself, the 3x3 neighborhood of wall slots
+    around it read from the position *after* the move (two bits per slot), and
+    the mover's exact-BFS distance bracket so patterns are only shared within
+    the same phase of the race. ``state`` is the position the action produced.
+    """
+    kind, index = decode_action(action)
+    if kind == "pawn":
+        x, y = coordinates(index)
+        anchor_x = min(x, WALL_GRID_SIZE - 1)
+        anchor_y = min(y, WALL_GRID_SIZE - 1)
+    else:
+        anchor_x, anchor_y = wall_coordinates(index)
+    pattern = 0
+    for offset_y in (-1, 0, 1):
+        for offset_x in (-1, 0, 1):
+            pattern <<= 2
+            slot_x = anchor_x + offset_x
+            slot_y = anchor_y + offset_y
+            if not (0 <= slot_x < WALL_GRID_SIZE and 0 <= slot_y < WALL_GRID_SIZE):
+                continue
+            bit = 1 << wall_index(slot_x, slot_y)
+            if state.horizontal & bit:
+                pattern |= 1
+            if state.vertical & bit:
+                pattern |= 2
+    mover = 1 - state.to_play
+    return action, pattern, state.shortest_distance(mover) // 4
+
+
 @dataclass(slots=True)
 class PendingEvaluation:
     node: Node
@@ -156,9 +197,7 @@ class PendingEvaluation:
 class SearchTree:
     root: Node
     _noise_applied: bool = field(default=False, init=False)
-    _bias: dict[tuple[int, int], list[float]] = field(
-        default_factory=dict, init=False
-    )
+    _bias: dict[tuple[int, ...], list[float]] = field(default_factory=dict, init=False)
 
     @classmethod
     def from_state(cls, state: State) -> SearchTree:
@@ -272,7 +311,8 @@ class SearchTree:
             )
             if child.state is None:
                 child.state = node.state.play(action, validate=False)
-                child.bucket = (node.bucket[1] if node.bucket else -1, action)
+                if config.subtree_bias_lambda > 0.0:
+                    child.bucket = bias_bucket(child.state, action)
             node = child
             path.append(child)
             key = child.state.position_key
@@ -281,7 +321,7 @@ class SearchTree:
                 return None
             seen.add(key)
 
-    def bucket_bias(self, bucket: tuple[int, int] | None) -> float:
+    def bucket_bias(self, bucket: tuple[int, ...] | None) -> float:
         """Weighted average evaluation error observed for this local pattern."""
         if bucket is None:
             return 0.0
@@ -533,15 +573,11 @@ def run_batched_search(
         for item, node_logits, value in zip(pending, logits, values, strict=True):
             _revert_virtual_loss(item.path)
             item.node.expand(node_logits)
-            raw = blended_leaf_value(
-                item.node.materialized_state, float(value), config
-            )
+            raw = blended_leaf_value(item.node.materialized_state, float(value), config)
             credited = raw
             if config.subtree_bias_lambda > 0.0 and item.tree is not None:
                 bias = item.tree.bucket_bias(item.node.bucket)
-                credited = min(
-                    1.0, max(-1.0, raw - config.subtree_bias_lambda * bias)
-                )
+                credited = min(1.0, max(-1.0, raw - config.subtree_bias_lambda * bias))
             item.node.nn_value = raw
             item.node.own_value = credited
             _backup(item.path, credited)

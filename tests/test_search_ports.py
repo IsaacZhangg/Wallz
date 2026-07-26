@@ -7,12 +7,13 @@ import math
 import numpy as np
 import pytest
 
-from wallzero.game import State
+from wallzero.game import State, horizontal_action, pawn_action
 from wallzero.mcts import (
     MCTSConfig,
     Node,
     SearchTree,
     UniformEvaluator,
+    bias_bucket,
     blended_leaf_value,
     run_batched_search,
 )
@@ -181,6 +182,29 @@ def test_subtree_bias_is_inert_when_disabled() -> None:
     )
     assert tree._bias == {}
     assert tree.bucket_bias((3, 4)) == 0.0
+
+
+def test_bias_bucket_encodes_action_local_walls_and_phase() -> None:
+    start = State.initial()
+    wall = horizontal_action(4, 4)
+    lone = bias_bucket(start.play(wall), wall)
+    # The key names the action, and the placed wall shows up in its own window.
+    assert lone[0] == wall
+    assert lone[1] != 0
+
+    # The identical wall placed next to an existing one is a different local
+    # pattern — exactly the distinction the old (prev, action) key missed.
+    neighbor = horizontal_action(3, 3)
+    crowded = bias_bucket(start.play(neighbor).play(pawn_action(67)).play(wall), wall)
+    assert crowded[0] == wall
+    assert crowded[1] != lone[1]
+
+    # A pawn step on an empty board sees no walls, and the phase bracket is
+    # the mover's exact BFS distance divided by four.
+    step = pawn_action(13)
+    opening = bias_bucket(start.play(step), step)
+    assert opening[1] == 0
+    assert opening[2] == start.play(step).shortest_distance(0) // 4
 
 
 def test_bucket_bias_reports_the_weighted_average_error() -> None:

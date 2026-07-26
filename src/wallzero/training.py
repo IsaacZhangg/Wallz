@@ -69,6 +69,9 @@ def train_candidate(
     if device.type == "cuda":
         torch.cuda.manual_seed_all(config.seed)
         torch.set_float32_matmul_precision("high")
+        # Input shapes never vary, so cuDNN autotuning is a pure win; it
+        # matters most on Pascal nodes, which lack tensor cores entirely.
+        torch.backends.cudnn.benchmark = True
 
     model.to(device)
     model.train()
@@ -81,7 +84,13 @@ def train_candidate(
         optimizer,
         lr_lambda=lambda step: _learning_rate_multiplier(step, config),
     )
-    use_bfloat16 = device.type == "cuda" and torch.cuda.is_bf16_supported()
+    # Gate bf16 on Ampere+ (sm80): torch reports "supported" on Pascal via slow
+    # emulation, measured 2026-07-25 on the GTX 1080 generation node.
+    use_bfloat16 = (
+        device.type == "cuda"
+        and torch.cuda.get_device_capability(device)[0] >= 8
+        and torch.cuda.is_bf16_supported()
+    )
     use_float16 = device.type == "cuda" and not use_bfloat16
     scaler = torch.amp.GradScaler("cuda", enabled=use_float16)
     autocast_dtype = torch.bfloat16 if use_bfloat16 else torch.float16
