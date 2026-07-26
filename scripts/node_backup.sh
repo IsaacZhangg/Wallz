@@ -23,10 +23,15 @@ log() { echo "[backup] $(date -Is) $*"; }
 
 rclone mkdir "$REMOTE/replay" "$REMOTE/checkpoints" 2>/dev/null
 
-# 1. Shards, state, logs (cheap, always).
+# 1. Shards, state, logs (cheap, always). Logs are staged to a snapshot
+#    copy first: uploading live-appended files fails Drive's checksum
+#    (backup.log would literally be uploading itself mid-write).
 rclone copy "$OUT/replay" "$REMOTE/replay" --include "chunk-*.npz" -q
 rclone copy "$OUT" "$REMOTE" --include "campaign-state.json" --include "chunk-metrics.jsonl" -q
-rclone copy "$HOME/wallzero" "$REMOTE/logs" --include "*.log" -q
+stage=$(mktemp -d)
+cp "$HOME/wallzero"/*.log "$stage/" 2>/dev/null
+rclone copy "$stage" "$REMOTE/logs" -q
+rm -rf "$stage"
 
 # 2. Current best (overwritten in place on Drive).
 rclone copyto "$OUT/best.pt" "$REMOTE/checkpoints/best.pt" -q && log "best.pt uploaded"
