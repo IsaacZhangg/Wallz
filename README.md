@@ -223,7 +223,12 @@ other shard. Manual PAUSE files win — the flywheel never acts while one it
 didn't create exists, and it retries failed rounds after 10 minutes with
 generation running. `train_candidate` also gained a prefetch thread
 (batch assembly overlaps GPU compute; verified bit-identical to the old
-loop), with round 36 as the live timing measurement.
+loop). Round 36 was the live measurement and **falsified the speedup
+estimate**: 52.3 min vs the 52.2-52.3 baseline — batch assembly was never
+a meaningful fraction of the step time on the 1080 (and the GIL limits
+overlap for Python-heavy assembly anyway). The change stays because it is
+proven bit-identical and costs nothing, but the 10-20% claim is dead;
+round time on this card is GPU compute, full stop.
 
 ## Recorded status (2026-07-25)
 
