@@ -159,7 +159,14 @@ class TorchEvaluator:
     ) -> None:
         self.model = model.to(device)
         self.device = device
-        self.amp = amp and device.type == "cuda"
+        # Gate bf16 autocast on Ampere+ (sm80), same as training: Pascal only
+        # emulates bf16, and its cublasLt bf16 kernels can hang inside
+        # cuLaunchKernel on driver 580 (see docs/node-1080-wedge-log.md).
+        self.amp = (
+            amp
+            and device.type == "cuda"
+            and torch.cuda.get_device_capability(device)[0] >= 8
+        )
         self.model.eval()
         if device.type == "cuda":
             torch.set_float32_matmul_precision("high")

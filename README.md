@@ -220,7 +220,18 @@ closes the training loop: a full 3,000-step round of the 30M network takes
 ~53-57 min (`scripts/node_train_bench.py`; torch's bf16-"support" on Pascal
 is emulation, 9.6x slower, now gated off by compute capability in
 `training.py`), so generate → train → adopt runs entirely on free hardware
-with round 32 the first PC-trained round.
+with round 32 the first PC-trained round (55.9 min live; sanity match vs
+round 31: 0.525 [0.375, 0.671] over 40 games).
+
+The "silent CUDA stall" was root-caused the same night
+(`docs/node-1080-wedge-log.md`): `TorchEvaluator` autocast sent all CUDA
+inference through torch's *emulated* bf16 on Pascal, and driver 580's
+emulated-bf16 cublasLt kernels can hang inside `cuLaunchKernel` on sm_61
+(py-spy native stack: `cublasLtTSTMatmul` spinning in `sched_yield`).
+`network.py` now gates inference autocast on compute capability >= 8, the
+generation node runs fp32 self-play at sustained 176-205W, and the loop
+script lives at `scripts/node_gen_loop.sh` (watchdog threshold 110W — a
+wedge can float at 88W with persistence mode on).
 
 ## Recorded status (2026-07-24)
 
