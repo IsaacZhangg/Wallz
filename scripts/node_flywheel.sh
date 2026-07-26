@@ -34,6 +34,8 @@ while true; do
   if [ "$rc" -eq 0 ]; then
     echo "[flywheel] $(date -Is) round adopted; generation resumed"
     last=$(count_shards)
+    timeout 30m bash "$HOME/wallzero/backup.sh" >> "$HOME/wallzero/backup.log" 2>&1 \
+      || echo "[flywheel] $(date -Is) backup failed (non-fatal, cron will retry)"
   else
     echo "[flywheel] $(date -Is) round FAILED (status $rc); generation resumed, retrying in 10 min"
     sleep 600
