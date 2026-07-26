@@ -213,6 +213,18 @@ after one night). Round times: r32 55.9 min, r33 52.2 (cuDNN autotune
 active), r34 103 (an accidental duplicate launch halved throughput — same
 seed, so artifacts were identical and unharmed), r35 52.3.
 
+The morning after, the PC cycle became self-driving:
+`scripts/node_flywheel.sh` (deployed as `~/wallzero/flywheel.sh`) watches
+the replay directory and, every 4 new shards from any source, pauses
+generation, trains one gateless round, adopts it, and resumes. Mac and
+Colab shards still merge manually (renumbered into the PC sequence while
+paused or mid-chunk into free indices); the flywheel counts them like any
+other shard. Manual PAUSE files win — the flywheel never acts while one it
+didn't create exists, and it retries failed rounds after 10 minutes with
+generation running. `train_candidate` also gained a prefetch thread
+(batch assembly overlaps GPU compute; verified bit-identical to the old
+loop), with round 36 as the live timing measurement.
+
 ## Recorded status (2026-07-25)
 
 The KataGo-recipe campaign (rounds 25-31: playout cap randomization, forced
