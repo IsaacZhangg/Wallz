@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import queue
+import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -14,6 +16,8 @@ from torch import nn
 from wallzero.encoding import encode_state, mirror_policy, mirror_state
 from wallzero.network import PolicyValueNet
 from wallzero.replay import TrainingExample
+
+FloatBatch = np.ndarray
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +110,9 @@ def train_candidate(
     sampling_weights = None if uniform_weights else frequency / frequency.sum()
     distance_head = getattr(model, "distance_output", None) is not None
 
-    for _ in range(config.steps):
+    def _assemble_batch() -> tuple[
+        FloatBatch, FloatBatch, FloatBatch, FloatBatch, FloatBatch
+    ]:
         if sampling_weights is None:
             indices = rng.integers(0, len(examples), size=config.batch_size)
         else:
@@ -129,14 +135,41 @@ def train_candidate(
             values.append(example.value)
             policy_weights.append(example.policy_weight)
             distances.append((example.own_distance, example.opp_distance))
-
-        inputs = torch.from_numpy(np.stack(states)).to(device, non_blocking=True)
-        target_policy = torch.from_numpy(np.stack(policies)).to(
-            device, non_blocking=True
+        return (
+            np.stack(states),
+            np.stack(policies),
+            np.asarray(values, dtype=np.float32),
+            np.asarray(policy_weights, dtype=np.float32),
+            np.asarray(distances, dtype=np.float32),
         )
-        target_value = torch.tensor(values, dtype=torch.float32, device=device)
-        policy_mask = torch.tensor(policy_weights, dtype=torch.float32, device=device)
-        target_distance = torch.tensor(distances, dtype=torch.float32, device=device)
+
+    # Assemble the next batch on a thread while the GPU runs the current step.
+    # All rng draws happen inside the single producer in the same order as the
+    # old inline loop, so per-seed determinism is unchanged.
+    batch_queue: queue.Queue = queue.Queue(maxsize=2)
+
+    def _prefetch() -> None:
+        try:
+            for _ in range(config.steps):
+                batch_queue.put(_assemble_batch())
+        except BaseException as error:
+            batch_queue.put(error)
+
+    prefetch_thread = threading.Thread(
+        target=_prefetch, name="batch-prefetch", daemon=True
+    )
+    prefetch_thread.start()
+
+    for _ in range(config.steps):
+        batch = batch_queue.get()
+        if isinstance(batch, BaseException):
+            raise batch
+        raw_states, raw_policies, raw_values, raw_weights, raw_distances = batch
+        inputs = torch.from_numpy(raw_states).to(device, non_blocking=True)
+        target_policy = torch.from_numpy(raw_policies).to(device, non_blocking=True)
+        target_value = torch.from_numpy(raw_values).to(device)
+        policy_mask = torch.from_numpy(raw_weights).to(device)
+        target_distance = torch.from_numpy(raw_distances).to(device)
 
         optimizer.zero_grad(set_to_none=True)
         context = (
@@ -183,6 +216,7 @@ def train_candidate(
         total_loss_total += float(loss.detach())
         entropy_total += float(entropy)
 
+    prefetch_thread.join()
     elapsed = time.monotonic() - started
     model.eval()
     denominator = config.steps
