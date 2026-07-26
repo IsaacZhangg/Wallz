@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Always-on self-play generation. Each chunk fsyncs its own shard, so a crash
 # or reboot costs at most the chunk in flight. 96-game chunks land roughly
-# every 1.5-2h on the GTX 1080 — small durable shards over big ones.
+# every 20 min on the GTX 1080 (frozen fp32 inference) — small durable
+# shards over big ones.
 #
 # Two watchdogs, both born from the chunk-82 wedge (server thread stuck in a
 # CUDA sync spin: 100% utilization at idle power, no Xid, unrecoverable from

@@ -161,6 +161,19 @@ def _actor_main(
         requests.put(_WorkerExit(worker_id))
 
 
+def _async_planes(evaluator: PlanesEvaluator) -> tuple[Any, Any] | None:
+    """Return (submit, collect) when the evaluator supports async batches.
+
+    Callers pass bound ``TorchEvaluator.evaluate_planes`` methods; the owning
+    evaluator advertises CUDA-only async support. Plain functions (the uniform
+    control, test doubles) keep the synchronous path.
+    """
+    owner = getattr(evaluator, "__self__", None)
+    if owner is None or not getattr(owner, "supports_async_planes", False):
+        return None
+    return owner.submit_planes, owner.collect_planes
+
+
 def _serve_evaluations(
     planes_evaluators: Sequence[PlanesEvaluator],
     requests: mp.Queue[Any],
@@ -169,43 +182,101 @@ def _serve_evaluations(
     server_failure: list[str],
 ) -> None:
     active = set(replies)
-    try:
-        while active:
-            try:
-                message = requests.get(timeout=_POLL_SECONDS)
-            except queue.Empty:
+    asyncs = [_async_planes(evaluator) for evaluator in planes_evaluators]
+    async_pairs = [pair for pair in asyncs if pair is not None]
+    pipelined = len(async_pairs) == len(planes_evaluators)
+
+    def drain(block: bool) -> list[_EvalRequest]:
+        batch: list[_EvalRequest] = []
+        try:
+            message = (
+                requests.get(timeout=_POLL_SECONDS) if block else requests.get_nowait()
+            )
+        except queue.Empty:
+            if block:
                 for worker_id in list(active):
                     if not processes[worker_id].is_alive():
                         active.discard(worker_id)
+            return batch
+        while True:
+            if isinstance(message, _WorkerExit):
+                active.discard(message.worker_id)
+            else:
+                batch.append(message)
+            try:
+                message = requests.get_nowait()
+            except queue.Empty:
+                return batch
+
+    def grouped(batch: list[_EvalRequest]) -> list[tuple[int, list[_EvalRequest]]]:
+        by_model: dict[int, list[_EvalRequest]] = {}
+        for request in batch:
+            by_model.setdefault(request.model_index, []).append(request)
+        return sorted(by_model.items())
+
+    def reply(group: list[_EvalRequest], logits: Any, values: Any) -> None:
+        offset = 0
+        for request in group:
+            count = len(request.planes)
+            replies[request.worker_id].send(
+                (
+                    logits[offset : offset + count],
+                    values[offset : offset + count],
+                )
+            )
+            offset += count
+
+    def evaluate_sync(batch: list[_EvalRequest]) -> None:
+        for model_index, group in grouped(batch):
+            planes = np.concatenate([request.planes for request in group])
+            logits, values = planes_evaluators[model_index](planes)
+            reply(group, logits, values)
+
+    def submit(batch: list[_EvalRequest]) -> list[tuple[int, list[_EvalRequest], Any]]:
+        flight = []
+        for model_index, group in grouped(batch):
+            planes = np.concatenate([request.planes for request in group])
+            submit_planes, _ = async_pairs[model_index]
+            flight.append((model_index, group, submit_planes(planes)))
+        return flight
+
+    def collect(flight: list[tuple[int, list[_EvalRequest], Any]]) -> None:
+        for model_index, group, pending in flight:
+            _, collect_planes = async_pairs[model_index]
+            logits, values = collect_planes(pending)
+            reply(group, logits, values)
+
+    try:
+        if not pipelined:
+            while active:
+                batch = drain(block=True)
+                if batch:
+                    evaluate_sync(batch)
+            return
+        # Pipelined: while the GPU runs batch N, keep draining requests into
+        # batch N+1 and submit it the moment N finishes, so reply
+        # serialization and queue work overlap GPU compute instead of
+        # leaving the device idle between forward passes.
+        in_flight: list[tuple[int, list[_EvalRequest], Any]] | None = None
+        backlog: list[_EvalRequest] = []
+        while active or in_flight is not None or backlog:
+            if in_flight is None:
+                backlog.extend(drain(block=not backlog))
+                if backlog:
+                    in_flight = submit(backlog)
+                    backlog = []
                 continue
-            batch: list[_EvalRequest] = []
-            while True:
-                if isinstance(message, _WorkerExit):
-                    active.discard(message.worker_id)
+            if not all(pending.ready() for _, _, pending in in_flight):
+                gathered = drain(block=False)
+                if gathered:
+                    backlog.extend(gathered)
                 else:
-                    batch.append(message)
-                try:
-                    message = requests.get_nowait()
-                except queue.Empty:
-                    break
-            if not batch:
+                    time.sleep(0.001)
                 continue
-            by_model: dict[int, list[_EvalRequest]] = {}
-            for request in batch:
-                by_model.setdefault(request.model_index, []).append(request)
-            for model_index, group in sorted(by_model.items()):
-                planes = np.concatenate([request.planes for request in group])
-                logits, values = planes_evaluators[model_index](planes)
-                offset = 0
-                for request in group:
-                    count = len(request.planes)
-                    replies[request.worker_id].send(
-                        (
-                            logits[offset : offset + count],
-                            values[offset : offset + count],
-                        )
-                    )
-                    offset += count
+            next_flight = submit(backlog) if backlog else None
+            backlog = []
+            collect(in_flight)
+            in_flight = next_flight
     except Exception:
         server_failure.append(traceback.format_exc())
         for connection in replies.values():

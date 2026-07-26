@@ -195,6 +195,35 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-26, node efficiency pass)
+
+Generation on the GTX 1080 measured 4.42 pos/s on a full 96-game
+production-recipe chunk (5,225 positions, 19.7 min) against 3.92-4.01
+across the five chunks before it — **+11.6%**, attributable to frozen
+TorchScript inference (`torch.jit.trace` + `freeze` +
+`optimize_for_inference`: batchnorm folding plus NNC elementwise/SE
+fusion; +11.4% in the isolated kernel bench at batch 512, max logit
+deviation 1.8e-4 — the same order as batchnorm folding alone). The freeze
+is gated to fp32 CUDA inference (pre-Ampere) because autocast does not
+apply inside TorchScript; the A100 bf16 path and the Mac's MPS path keep
+the eager module. The eval server also gained an async submit/collect
+pipeline (pinned staging buffers, CUDA events) overlapping queue draining
+and reply serialization with GPU compute — measured neutral on top of the
+freeze: back-to-back forwards with zero server logic draw the same
+~150-160W as live generation, so the server was not leaving meaningful GPU
+idle and power draw is not a utilization proxy for this workload (the
+wedge-log 176-205W was a different phase mix). Measured and rejected on
+this card: fp16 inference (pseudo-half, 7-10% *slower*, 1000x the
+deviation — Pascal has no usable fp16), inference-side cuDNN autotune and
+eager batchnorm folding (≤1% each), and fp16-vs-fp32 training at batch 512
+(now identical at 1.045 vs 1.047 s/step once cuDNN autotune is active; the
+07-25 bench that showed fp16 at 57 min predated autotune). Training rounds
+stay ~52 min — that is the card's fp32 compute floor for the 3,000-step
+recipe. Known remaining headroom: GPU Boost holds the SM at 1670 MHz in P2
+(boost table allows 1974); raising it needs Coolbits in xorg.conf plus an
+X restart, deferred as a user decision. With ~20-min chunks the flywheel
+now trains (52 min) after every ~80 min of generation.
+
 ## Recorded status (2026-07-26 overnight)
 
 First full night of the free-fleet flywheel: rounds 32-35 trained, adopted,

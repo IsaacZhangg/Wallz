@@ -147,6 +147,33 @@ def select_device(requested: str = "auto") -> torch.device:
     return torch.device("cpu")
 
 
+@dataclass(slots=True)
+class _HostSlot:
+    """Pinned host staging buffers for one in-flight evaluation batch."""
+
+    inputs: Tensor
+    logits: Tensor
+    values: Tensor
+
+
+@dataclass(slots=True)
+class PendingPlanes:
+    """Handle to a submitted, not-yet-collected evaluation batch.
+
+    The numpy views returned by ``collect_planes`` alias the pinned slot and
+    stay valid until the slot is reused, two submissions later; consumers must
+    copy or serialize them before then (the eval server pickles them into
+    worker pipes immediately, which copies).
+    """
+
+    slot: _HostSlot
+    count: int
+    event: Any
+
+    def ready(self) -> bool:
+        return bool(self.event.query())
+
+
 class TorchEvaluator:
     """Batched, inference-only adapter used by MCTS."""
 
@@ -156,6 +183,7 @@ class TorchEvaluator:
         device: torch.device,
         *,
         amp: bool = True,
+        jit_freeze: bool = True,
     ) -> None:
         self.model = model.to(device)
         self.device = device
@@ -167,9 +195,30 @@ class TorchEvaluator:
             and device.type == "cuda"
             and torch.cuda.get_device_capability(device)[0] >= 8
         )
+        # Async submit/collect lets the eval server overlap GPU compute with
+        # queue draining and reply serialization; CUDA only.
+        self.supports_async_planes = device.type == "cuda"
+        self._slots: list[_HostSlot] = []
+        self._slot_index = 0
         self.model.eval()
         if device.type == "cuda":
             torch.set_float32_matmul_precision("high")
+        self._forward: Any = self.model
+        # On pre-Ampere CUDA (fp32 inference), freeze a traced copy:
+        # optimize_for_inference folds batchnorm and NNC-fuses the
+        # elementwise/SE chains, measured +11% samples/s on the GTX 1080
+        # (max logit deviation 1.8e-4, same order as batchnorm folding).
+        # Autocast does not apply inside TorchScript, so the bf16 path
+        # keeps the eager module.
+        if jit_freeze and device.type == "cuda" and not self.amp:
+            example = torch.zeros(
+                (2, self.model.config.input_planes, 9, 9), device=device
+            )
+            with torch.no_grad():
+                traced = torch.jit.trace(self.model, example)
+                self._forward = torch.jit.optimize_for_inference(
+                    torch.jit.freeze(traced.eval())
+                )
 
     def __call__(self, states: list[State]) -> tuple[FloatArray, FloatArray]:
         if not states:
@@ -193,10 +242,67 @@ class TorchEvaluator:
             else nullcontext()
         )
         with torch.inference_mode(), context:
-            logits, values = self.model(inputs)
+            logits, values = self._forward(inputs)
         return (
             logits.float().cpu().numpy(),
             values.float().cpu().numpy(),
+        )
+
+    def _staging_slot(self, count: int) -> _HostSlot:
+        """Rotate between two pinned slots, growing capacity as needed."""
+        if len(self._slots) < 2:
+            self._slots.append(self._new_slot(count))
+            self._slot_index = len(self._slots) - 1
+            return self._slots[self._slot_index]
+        self._slot_index = (self._slot_index + 1) % 2
+        if self._slots[self._slot_index].inputs.shape[0] < count:
+            self._slots[self._slot_index] = self._new_slot(count)
+        return self._slots[self._slot_index]
+
+    def _new_slot(self, count: int) -> _HostSlot:
+        capacity = max(256, 1 << (count - 1).bit_length())
+        planes = self.model.config.input_planes
+        return _HostSlot(
+            inputs=torch.empty(
+                (capacity, planes, 9, 9), dtype=torch.float32, pin_memory=True
+            ),
+            logits=torch.empty(
+                (capacity, self.model.config.action_size),
+                dtype=torch.float32,
+                pin_memory=True,
+            ),
+            values=torch.empty((capacity,), dtype=torch.float32, pin_memory=True),
+        )
+
+    def submit_planes(self, planes: FloatArray) -> PendingPlanes:
+        """Launch one evaluation batch without waiting for the result.
+
+        The H2D copy, forward pass, and D2H copy are all queued on the CUDA
+        stream through pinned staging buffers, so the caller keeps the CPU
+        while the GPU works; ``collect_planes`` waits and returns the arrays.
+        """
+        count = len(planes)
+        slot = self._staging_slot(count)
+        slot.inputs[:count].copy_(torch.from_numpy(planes))
+        inputs = slot.inputs[:count].to(self.device, non_blocking=True)
+        context = (
+            torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+            if self.amp
+            else nullcontext()
+        )
+        with torch.inference_mode(), context:
+            logits, values = self._forward(inputs)
+            slot.logits[:count].copy_(logits.float(), non_blocking=True)
+            slot.values[:count].copy_(values.float(), non_blocking=True)
+        event = torch.cuda.Event()
+        event.record()
+        return PendingPlanes(slot=slot, count=count, event=event)
+
+    def collect_planes(self, pending: PendingPlanes) -> tuple[FloatArray, FloatArray]:
+        pending.event.synchronize()
+        return (
+            pending.slot.logits[: pending.count].numpy(),
+            pending.slot.values[: pending.count].numpy(),
         )
 
 
