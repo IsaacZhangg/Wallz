@@ -201,9 +201,11 @@ The generation node became self-healing end to end. Context: the P2 clock
 latch (1670 MHz) recurred **spontaneously** the same evening — no
 `nvidia-smi -pl` involved; the suspected trigger is idle/load P-state
 cycling between chunks. Offsets queried as applied, no throttle reasons
-active, PowerMizer and offset re-toggles did not clear it; only a reboot
-does. Chunk 130 ran at 6.66 pos/s instead of ~7.05, invisible to the old
-power-only watchdog — "slow" is a failure mode distinct from "dead".
+active, PowerMizer and offset re-toggles did not clear it; that episode
+only cleared on reboot (but see the night-shift addendum below — a later
+episode cleared without one). Chunk 130 ran at 6.66 pos/s instead of
+~7.05, invisible to the old power-only watchdog — "slow" is a failure
+mode distinct from "dead".
 
 Hardening shipped (repo `scripts/node_*.sh` + `scripts/systemd/`, deployed
 to `~/wallzero/` and `/etc/systemd/system/` on the node):
@@ -236,6 +238,35 @@ to `~/wallzero/` and `/etc/systemd/system/` on the node):
   (`Restart=always`), so a power blip, script crash, or auto-reboot no
   longer needs a human. The old `setsid nohup` launch procedure is
   obsolete.
+
+### Night-shift addendum (2026-07-26 late): the latch model, revised live
+
+Round 40 settled an open question: it trained in 2980 s — identical to
+round 39's 2979 s — while the core read 1670 MHz throughout. **Training
+speed is unaffected by the latch** (the +800 mem offset, which survives
+latches, carries training); a 1670 MHz core reading during a training
+round is a non-signal. Do not "fix" it.
+
+Generation then resumed latched for the second time in two post-training
+resumes — the trigger is all but confirmed as the training→generation
+P-state transition, meaning every flywheel round may re-latch the card.
+Watching the (new) clock watchdog respond exposed a live bug: its
+counters reset per chunk, and a latched chunk only lasts ~13.5 min, so
+the 10-min re-apply stage fired every chunk while the 10-more-minutes
+reboot stage was unreachable. Fixed by persisting the counters across
+chunk boundaries (a healthy sample re-arms the ladder).
+
+The fixed ladder then produced a surprise: after the stage-1 offset
+re-apply (22:33), clocks recovered to 1898 MHz **without a reboot** ~8
+min later, mid-chunk — falsifying "only a reboot clears it". The
+watchdog correctly stood down (healthy sample reset), avoiding a
+needless reboot. Measured economics, for future policy: the latch costs
+0.37 pos/s (6.68 vs 7.05, chunk 134), so one episode self-healed by
+stage 1 costs ~450 positions, while a reboot costs ~5 min downtime
+(~2000 positions) — the reboot stage is a last-resort backstop, not the
+remedy. The fan-80% trigger hypothesis stays untested (config held
+constant overnight so post-training resumes stay a clean reproducibility
+test); it is a daylight experiment.
 
 ## Recorded status (2026-07-26, node efficiency pass)
 

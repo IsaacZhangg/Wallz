@@ -74,6 +74,13 @@ pause_is_stale() {
 fails=0
 reboot_pending=""
 stale_pause=0
+# The clock-latch counters live OUTSIDE the per-chunk loop on purpose: a
+# latched chunk only lasts ~13.5 min, so a per-chunk counter would fire the
+# 10-min offset re-apply and then reset at the boundary — the 10-more-minutes
+# reboot stage could never be reached (observed 2026-07-26 after round 40:
+# every post-training chunk ran latched at 1670 MHz while the watchdog
+# "re-applied" offsets each chunk forever). A healthy fast sample resets both.
+slow=0 oc_reapplied=0
 log "watchdog config: power<110W/15min kill; clocks<${MIN_SM_MHZ}MHz/10min reapply-then-reboot; autostart=$([ -f "$AUTOSTART" ] && echo on || echo off)"
 while true; do
   if [ -f "$HOME/wallzero/PAUSE" ]; then
@@ -100,7 +107,7 @@ while true; do
   log "starting chunk"
   setsid timeout --kill-after=60 3h .venv/bin/python scripts/node_chunk_kata.py &
   chunk_pid=$!
-  low=0 slow=0 wedged=0 ticks=0 oc_reapplied=0
+  low=0 wedged=0 ticks=0
   while kill -0 "$chunk_pid" 2>/dev/null; do
     sleep 10
     ticks=$((ticks + 1))
@@ -118,6 +125,7 @@ while true; do
         slow=$((slow + 1))
       else
         slow=0
+        oc_reapplied=0 # clocks healthy again; re-arm the two-stage ladder
       fi
     fi
     if [ "$low" -ge 15 ]; then
