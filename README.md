@@ -313,7 +313,11 @@ this exact 1670-latch signature was found; a VBIOS interaction can't be
 excluded. Definitive test if ever needed: driver downgrade. Promising
 prevention candidate from the audit: a keepP2-style keep-alive kernel
 across the train↔generate handoff, so the card never leaves P2 —
-the latch is 5-for-5 on exactly those transitions.
+the latch is 5-for-5 on exactly those transitions. **Deployed
+2026-07-27 09:47** as `wallzero-keepalive.service`
+(`scripts/node_gpu_keepalive.py`: 64×64 matmul at 10 Hz, 150 MiB
+context, Nice=10, supervised like the rest); result to be judged on
+the next few post-training resumes.
 
 ## Recorded status (2026-07-26, node efficiency pass)
 
