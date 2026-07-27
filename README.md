@@ -323,10 +323,31 @@ P8/139 MHz drops — the card **latched anyway** at 11:04-11:05, under
 rebooted card. So the trigger is NOT the idle P-state excursion; the
 hidden driver state can flip while continuously in P2, with elevated
 probability around workload rearrangements (post-training resumes
-remain 5-for-5). Do not re-try keep-alive variants. Remaining
-prevention candidates, in order: driver downgrade (also the definitive
-driver-side proof), fan-80%, accept-and-manage (the watchdog ladder
-caps the cost at ~2-5% of throughput).
+remain 5-for-5). Do not re-try keep-alive variants.
+
+**Deep-dig conclusions (2026-07-27 afternoon).** The symptom matches
+NVIDIA's own acknowledged bug 5934973 — "when the graphics card is
+overclocked, GPU voltage may become capped, preventing it from boosting
+to expected levels" — which shipped in the 2026 595-era drivers on BOTH
+Windows (recalled + hotfixed 595.76/78) and Linux (user-measured on
+595.45.04). Our 580.173.02 legacy build is dated June 2026, months
+after that regression existed upstream, and legacy branches receive
+backports. Forensics with the card latched live: the driver's perf
+table still advertises nvclockmax 2088 with the mem offset applied
+(4913) while the governor sits at 1670 — and Pascal exposes no voltage
+query to confirm the cap directly. Every remedy short of reboot is now
+tested-dead: offset re-apply (2/5), persistence-mode toggle (no),
+PowerMizer registry keys (removed from the driver after 525),
+`-lgc` (Volta+ only), `-ac` (unsupported on this board). Constraints on
+driver rollback: 580 is officially the LAST Pascal branch (support to
+Aug 2028), apt carries ONLY 580.173.02 for noble, and the node runs
+kernel 7.0 that older point releases (580.142/570.x) predate — a failed
+DKMS build would take down X and with it the OC entirely. Decision:
+accept-and-manage through the data-volume milestone; an
+`nvidia-bug-report.log.gz` captured DURING a live latch is saved at
+`artifacts/nvidia-bug-report-latched-580.173.02.log.gz` for an upstream
+report to the 580-legacy feedback thread (real path to a fix — the
+branch takes critical fixes until 2028).
 
 ## Recorded status (2026-07-26, node efficiency pass)
 
