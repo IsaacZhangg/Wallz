@@ -19,7 +19,12 @@ import torch
 
 from wallzero.network import TorchEvaluator, load_checkpoint
 
-REF = "/tmp/wz-oc/reference.npz"
+REF = "/home/tzhang/wallzero/gpu-canary-reference.npz"
+
+import hashlib
+
+BEST = "output/wallzero-output/best.pt"
+best_hash = hashlib.sha256(open(BEST, "rb").read()).hexdigest()
 
 model, _ = load_checkpoint("output/wallzero-output/best.pt", device="cuda")
 evaluator = TorchEvaluator(model, torch.device("cuda"))
@@ -31,11 +36,22 @@ for _ in range(3):  # profiling-executor warmup: steady-state kernels only
 logits, values = evaluator.evaluate_planes(batch)
 os.makedirs("/tmp/wz-oc", exist_ok=True)
 if not os.path.exists(REF):
-    np.savez(REF, logits=logits, values=values)
+    np.savez(REF, logits=logits, values=values, best_hash=np.array(best_hash))
     print(json.dumps({"canary": "reference-created"}), flush=True)
     sys.exit(0)
 
 reference = np.load(REF)
+if str(reference.get("best_hash", "")) != best_hash:
+    print(
+        json.dumps(
+            {
+                "canary": "STALE-REFERENCE",
+                "hint": "best.pt changed; recreate at known-good clocks",
+            }
+        ),
+        flush=True,
+    )
+    sys.exit(3)
 
 
 def check(tag: str) -> None:

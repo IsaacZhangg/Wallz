@@ -216,18 +216,26 @@ Three stacked, individually measured changes took GTX 1080 generation from
    Idle CPU/RAM buying back GPU forwards was the only productive use found
    for the mostly idle i7 — extra workers cannot add throughput at the
    inference roofline.
-3. **GPU clock offsets via Coolbits (+13.6%, chunk 125 at 7.05):** fan
-   pinned at 80% (76→57-70C) plus +100 MHz core / +800 MT/s memory
-   offsets, no overvoltage, stock 198W power limit kept as a guard.
-   Sustained compute clocks went 1670→1822-1898 MHz and P2 memory
-   4513→4911 (still under its own 5005 spec). Every step passed a
+3. **GPU clock offsets via Coolbits (+13.6%, chunk 125 at 7.05; final
+   config chunk 129 at 7.09):** fan at 100% (76→56-63C under load) plus
+   +125 MHz core / +800 MT/s memory offsets — the validated maximums:
+   +150 core fails the bitwise canary, so +125 is this silicon's ceiling
+   at stock voltage. No overvoltage; stock 198W power limit (full OC
+   draws ~195-205W). Sustained compute clocks 1670→1885-1936 MHz, P2
+   memory 4513→4911 (still under its own 5005 spec). Every step passed a
    bitwise-repeatability canary (`scripts/node_gpu_canary.py` — clocks do
    not change math, so any output deviation is a silent compute error) and
-   a training-loss sanity bench; offsets reset on X restart/reboot and are
-   re-applied with `scripts/node_gpu_oc.sh 100 800 80` (deployed at
-   `~/wallzero/gpu-oc.sh`). Canary caveat learned: TorchScript's profiling
-   executor uses different kernels on the first calls, so references must
-   be recorded after warmup.
+   a training-loss sanity bench; round 39 trained in 49.7 min vs 52.3
+   stock. Offsets reset on X restart/reboot; re-apply with
+   `~/wallzero/gpu-oc.sh` (repo: `scripts/node_gpu_oc.sh`, defaults are
+   the validated values). Two traps recorded: (a) the canary reference
+   must be recorded after TorchScript profiling-executor warmup and is
+   bound to the best.pt hash (the flywheel adopts new weights mid-day,
+   which otherwise poisons the comparison); (b) **never run
+   `nvidia-smi -pl` on this node** — changing the power limit (even up)
+   latches the P2 core boost at 1670 MHz on driver 580 + Pascal and only
+   a reboot clears it; discovered when a user-approved 220W cap attempt
+   *pinned* the clocks the offsets had unlocked.
 
 The eval server also gained an async submit/collect pipeline (pinned
 staging buffers, CUDA events) overlapping queue draining and reply
