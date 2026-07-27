@@ -313,11 +313,20 @@ this exact 1670-latch signature was found; a VBIOS interaction can't be
 excluded. Definitive test if ever needed: driver downgrade. Promising
 prevention candidate from the audit: a keepP2-style keep-alive kernel
 across the train↔generate handoff, so the card never leaves P2 —
-the latch is 5-for-5 on exactly those transitions. **Deployed
-2026-07-27 09:47** as `wallzero-keepalive.service`
-(`scripts/node_gpu_keepalive.py`: 64×64 matmul at 10 Hz, 150 MiB
-context, Nice=10, supervised like the rest); result to be judged on
-the next few post-training resumes.
+the latch is 5-for-5 on exactly those transitions. **Tried and falsified
+2026-07-27** (`scripts/node_gpu_keepalive.py` +
+`wallzero-keepalive.service`, kept in-repo as a documented dead end,
+service disabled): with the keep-alive verified holding the card in P2
+continuously — near-idle samples read P2/1670/48 W instead of the old
+P8/139 MHz drops — the card **latched anyway** at 11:04-11:05, under
+~full load, ~2 min after a routine chunk boundary, on a freshly
+rebooted card. So the trigger is NOT the idle P-state excursion; the
+hidden driver state can flip while continuously in P2, with elevated
+probability around workload rearrangements (post-training resumes
+remain 5-for-5). Do not re-try keep-alive variants. Remaining
+prevention candidates, in order: driver downgrade (also the definitive
+driver-side proof), fan-80%, accept-and-manage (the watchdog ladder
+caps the cost at ~2-5% of throughput).
 
 ## Recorded status (2026-07-26, node efficiency pass)
 
