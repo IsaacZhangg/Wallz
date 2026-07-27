@@ -258,15 +258,22 @@ chunk boundaries (a healthy sample re-arms the ladder).
 
 The fixed ladder then produced a surprise: after the stage-1 offset
 re-apply (22:33), clocks recovered to 1898 MHz **without a reboot** ~8
-min later, mid-chunk — falsifying "only a reboot clears it". The
-watchdog correctly stood down (healthy sample reset), avoiding a
-needless reboot. Measured economics, for future policy: the latch costs
-0.37 pos/s (6.68 vs 7.05, chunk 134), so one episode self-healed by
-stage 1 costs ~450 positions, while a reboot costs ~5 min downtime
-(~2000 positions) — the reboot stage is a last-resort backstop, not the
-remedy. The fan-80% trigger hypothesis stays untested (config held
-constant overnight so post-training resumes stay a clean reproducibility
-test); it is a daylight experiment.
+min later, mid-chunk — falsifying "only a reboot clears it". But the
+post-round-41 episode showed that self-heal is unreliable (1 of 2):
+stage 1 fired at 00:18, clocks stayed latched through a chunk boundary,
+stage 2 declared the reboot at 00:29, and at 00:35:45 the **first fully
+autonomous recovery ran end to end**: boundary reboot (chunk-140 shard
+saved first), 28-s boot, prep detected a stale canary reference (best.pt
+had advanced two rounds), re-recorded it at stock, applied OC, PASS at
+224 iterations, and chunk 141 was generating at full clocks at 00:37:51
+— **under 2 minutes of downtime**, flywheel baseline intact. Measured
+economics: the latch costs 0.37 pos/s (6.68 vs 7.05, chunk 134), a full
+episode ending in reboot ~1150 positions (~2% of a cycle), one that
+self-heals ~450. The 6-h reboot rate limit is the right shape: never
+reboot for a latch preemptively; let the ladder decide. The fan-80%
+trigger hypothesis stays untested (config held constant overnight so
+post-training resumes stay a clean reproducibility test; the latch is
+now 3-for-3 on those resumes); it is a daylight experiment.
 
 ## Recorded status (2026-07-26, node efficiency pass)
 
