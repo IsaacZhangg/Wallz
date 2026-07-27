@@ -4,40 +4,85 @@
 # shards — it only counts files), it pauses the generation loop, trains one
 # gateless round, adopts the result, and resumes generation.
 #
-# Runs alongside gen_loop.sh, which owns generation and the power watchdog.
+# Runs alongside gen_loop.sh, which owns generation and its watchdogs.
 # Respects a PAUSE file it did not create (manual interventions win), and
 # skips while any training round is already running. Checkpoint pulls to
 # other machines and Mac/Colab merges stay manual by design.
+#
+# Robustness (2026-07-26): the PAUSE file is tagged "flywheel:<pid>" so
+# gen_loop and boot prep can tell a crashed flywheel's stale pause from a
+# manual one; a power watchdog kills a wedged training round (same
+# 110W/15min rule as generation — a wedge would otherwise burn the full 3h
+# timeout with the GPU idle and generation paused).
 cd "$HOME/wallzero" || exit 1
 OUT="$HOME/wallzero/output/wallzero-output"
 THRESHOLD=${FLYWHEEL_CHUNKS:-4}
+PAUSE="$HOME/wallzero/PAUSE"
 
+log() { echo "[flywheel] $(date -Is) $*"; }
 count_shards() { ls "$OUT/replay"/chunk-*.npz 2>/dev/null | wc -l; }
+is_num() { case "$1" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
-last=$(count_shards)
-echo "[flywheel] $(date -Is) started; $last shards, training every $THRESHOLD new"
+# A previous flywheel instance may have died mid-round: its tagged pause
+# would otherwise stop generation forever. Manual PAUSE files are kept.
+if head -1 "$PAUSE" 2>/dev/null | grep -q "^flywheel:"; then
+  old=$(head -1 "$PAUSE" | cut -d: -f2)
+  if ! kill -0 "$old" 2>/dev/null && ! pgrep -f "node_round_kata[.]py" >/dev/null; then
+    log "removing stale PAUSE from dead flywheel $old"
+    rm -f "$PAUSE"
+  fi
+fi
+
+release_pause() { # only remove the pause if it is still ours
+  head -1 "$PAUSE" 2>/dev/null | grep -q "^flywheel:$$\$" && rm -f "$PAUSE"
+}
+
+# The shard baseline persists across restarts: without this, every restart
+# (crash, reboot, systemd Restart=always) forgot progress toward the next
+# round and postponed training by up to a full threshold of chunks.
+LAST_FILE="$HOME/wallzero/.flywheel-last"
+last=$(cat "$LAST_FILE" 2>/dev/null)
+is_num "$last" || last=$(count_shards)
+[ "$last" -gt "$(count_shards)" ] && last=$(count_shards) # shards renumbered/removed
+echo "$last" >"$LAST_FILE"
+log "started; $(count_shards) shards, baseline $last, training every $THRESHOLD new"
 while true; do
   sleep 120
-  if [ -f "$HOME/wallzero/PAUSE" ]; then continue; fi
-  if pgrep -f node_round_kata.py > /dev/null; then continue; fi
+  [ -f "$PAUSE" ] && continue
+  pgrep -f "node_round_kata[.]py" >/dev/null && continue
   now=$(count_shards)
-  if [ $((now - last)) -lt "$THRESHOLD" ]; then continue; fi
+  [ $((now - last)) -lt "$THRESHOLD" ] && continue
 
-  echo "[flywheel] $(date -Is) $((now - last)) new shards; pausing generation"
-  touch "$HOME/wallzero/PAUSE"
-  while pgrep -f node_chunk_kata.py > /dev/null; do sleep 30; done
-  echo "[flywheel] $(date -Is) training round starting"
-  timeout --kill-after=60 3h env WALLZERO_OUTPUT="$OUT" WALLZERO_STEPS=3000 \
-    .venv/bin/python scripts/node_round_kata.py >> "$HOME/wallzero/night.log" 2>&1
+  log "$((now - last)) new shards; pausing generation"
+  echo "flywheel:$$" >"$PAUSE"
+  while pgrep -f "node_chunk_kata[.]py" >/dev/null; do sleep 30; done
+  log "training round starting"
+  setsid timeout --kill-after=60 3h env WALLZERO_OUTPUT="$OUT" WALLZERO_STEPS=3000 \
+    .venv/bin/python scripts/node_round_kata.py >>"$HOME/wallzero/night.log" 2>&1 &
+  round_pid=$!
+  low=0
+  while kill -0 "$round_pid" 2>/dev/null; do
+    sleep 60
+    watts=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1 | cut -d. -f1)
+    is_num "$watts" || watts=0 # failed read = unhealthy
+    if [ "$watts" -lt 110 ]; then low=$((low + 1)); else low=0; fi
+    if [ "$low" -ge 15 ]; then
+      log "power watchdog: ${watts}W for 15 min; killing wedged round group"
+      kill -9 -- "-$round_pid" 2>/dev/null
+      break
+    fi
+  done
+  wait "$round_pid"
   rc=$?
-  rm -f "$HOME/wallzero/PAUSE"
+  release_pause
   if [ "$rc" -eq 0 ]; then
-    echo "[flywheel] $(date -Is) round adopted; generation resumed"
+    log "round adopted; generation resumed"
     last=$(count_shards)
-    timeout 30m bash "$HOME/wallzero/backup.sh" >> "$HOME/wallzero/backup.log" 2>&1 \
-      || echo "[flywheel] $(date -Is) backup failed (non-fatal, cron will retry)"
+    echo "$last" >"$LAST_FILE"
+    timeout 30m bash "$HOME/wallzero/backup.sh" >>"$HOME/wallzero/backup.log" 2>&1 ||
+      log "backup failed (non-fatal, cron will retry)"
   else
-    echo "[flywheel] $(date -Is) round FAILED (status $rc); generation resumed, retrying in 10 min"
+    log "round FAILED (status $rc); generation resumed, retrying in 10 min"
     sleep 600
   fi
 done

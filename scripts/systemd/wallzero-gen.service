@@ -1,0 +1,20 @@
+# WallZero self-play generation loop, supervised: restarts if it ever dies
+# and starts automatically after boot (after OC prep). Stopping the service
+# kills the whole cgroup, so no orphaned chunk workers survive a stop.
+[Unit]
+Description=WallZero self-play generation loop
+After=wallzero-prep.service
+Wants=wallzero-prep.service
+
+[Service]
+User=tzhang
+Environment=HOME=/home/tzhang
+WorkingDirectory=/home/tzhang/wallzero
+ExecStart=/bin/bash /home/tzhang/wallzero/gen_loop.sh
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/tzhang/wallzero/gen.log
+StandardError=append:/home/tzhang/wallzero/gen.log
+
+[Install]
+WantedBy=multi-user.target

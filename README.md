@@ -195,6 +195,48 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-26 evening, node watchdog hardening)
+
+The generation node became self-healing end to end. Context: the P2 clock
+latch (1670 MHz) recurred **spontaneously** the same evening — no
+`nvidia-smi -pl` involved; the suspected trigger is idle/load P-state
+cycling between chunks. Offsets queried as applied, no throttle reasons
+active, PowerMizer and offset re-toggles did not clear it; only a reboot
+does. Chunk 130 ran at 6.66 pos/s instead of ~7.05, invisible to the old
+power-only watchdog — "slow" is a failure mode distinct from "dead".
+
+Hardening shipped (repo `scripts/node_*.sh` + `scripts/systemd/`, deployed
+to `~/wallzero/` and `/etc/systemd/system/` on the node):
+
+- **Clock watchdog** in `gen_loop.sh`: under real load (>=110W), SM clocks
+  below 1700 MHz for 10 min → re-apply `gpu-oc.sh` once (covers lost
+  offsets after an X restart); still latched 10 min later → reboot at the
+  next *chunk boundary* (no work lost), rate-limited to one auto-reboot
+  per 6h and only when systemd autostart is enabled.
+- **Fail-safe power reads**: a failed/garbled `nvidia-smi` read now counts
+  as unhealthy (the old code defaulted to a healthy 200W, so a dead driver
+  looked fine forever).
+- **Group-scoped worker sweeps**: `pkill -9 -g <chunk_pgid>` replaces the
+  broad `pkill -f spawn_main` that once killed a healthy training round's
+  loaders. Failed chunks escalate: 5-min backoff from the 3rd consecutive
+  failure, last-resort reboot from the 5th.
+- **Tagged PAUSE**: the flywheel writes `flywheel:<pid>` into PAUSE; a
+  pause whose owner died with no round running is removed automatically
+  (by gen_loop after 3 min, by the flywheel at startup, by boot prep after
+  a reboot). Manual PAUSE files (any other content) are never touched and
+  now survive reboots meaningfully.
+- **Flywheel power watchdog**: a wedged training round (same <110W/15-min
+  rule) is killed instead of burning its full 3h timeout with generation
+  paused.
+- **Boot recovery** (`wallzero-prep/gen/flywheel.service`): on every boot,
+  prep waits for GPU+X, runs the bitwise canary at stock clocks
+  (re-recording the reference there if best.pt changed — stock is always
+  trustworthy), applies the validated OC, and re-verifies; canary failure
+  falls back to stock. Generation and flywheel then start supervised
+  (`Restart=always`), so a power blip, script crash, or auto-reboot no
+  longer needs a human. The old `setsid nohup` launch procedure is
+  obsolete.
+
 ## Recorded status (2026-07-26, node efficiency pass)
 
 Three stacked, individually measured changes took GTX 1080 generation from

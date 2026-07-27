@@ -1,0 +1,19 @@
+# WallZero auto-flywheel (train one round per 4 new shards), supervised:
+# restarts if it ever dies and starts automatically after boot.
+[Unit]
+Description=WallZero auto-flywheel training loop
+After=wallzero-prep.service
+Wants=wallzero-prep.service
+
+[Service]
+User=tzhang
+Environment=HOME=/home/tzhang
+WorkingDirectory=/home/tzhang/wallzero
+ExecStart=/bin/bash /home/tzhang/wallzero/flywheel.sh
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/tzhang/wallzero/flywheel.log
+StandardError=append:/home/tzhang/wallzero/flywheel.log
+
+[Install]
+WantedBy=multi-user.target

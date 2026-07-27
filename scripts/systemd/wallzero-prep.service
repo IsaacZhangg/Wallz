@@ -1,0 +1,24 @@
+# WallZero node boot prep: apply GPU OC + bitwise canary gate before the
+# generation/flywheel services start. Install to /etc/systemd/system/.
+# Ordering note: do NOT use After=graphical.target here — combined with
+# WantedBy=multi-user.target it forms an ordering cycle and systemd drops
+# this unit from the boot transaction entirely (observed 2026-07-26: prep
+# silently skipped, generation started without OC). The script itself waits
+# for the GPU and the X socket, so lightdm ordering is best-effort only.
+[Unit]
+Description=WallZero node boot prep (GPU OC + canary)
+After=lightdm.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=tzhang
+Environment=HOME=/home/tzhang
+WorkingDirectory=/home/tzhang/wallzero
+ExecStart=/bin/bash /home/tzhang/wallzero/boot_prep.sh
+TimeoutStartSec=900
+StandardOutput=append:/home/tzhang/wallzero/prep.log
+StandardError=append:/home/tzhang/wallzero/prep.log
+
+[Install]
+WantedBy=multi-user.target
