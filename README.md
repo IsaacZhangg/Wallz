@@ -275,6 +275,18 @@ trigger hypothesis stays untested (config held constant overnight so
 post-training resumes stay a clean reproducibility test; the latch is
 now 3-for-3 on those resumes); it is a daylight experiment.
 
+Full night's tally (2026-07-26 22:00 → 07-27 06:46, zero human
+intervention): rounds 40-44 trained and adopted on cadence, every one at
+~2980 s regardless of latch state; losses monotonic (total 1.5820 →
+1.5240, value 0.0999 → 0.0878); replay 87 shards / 500,435 positions
+(376,894 post-chunk-82, ~62% of the pre-declared 1M data-volume
+trigger). Two autonomous reboots (00:35 and 06:42 — the second at the
+first chunk boundary after the 6-h rate limit expired, ending ~4.5 h of
+correctly-chosen degraded-mode generation), both under 2.5 min downtime
+with the in-flight shard saved and the canary re-verified. Every latch
+was triggered by a train↔generate P-state transition; generation-side
+latches are now 4-for-4 on those transitions.
+
 ## Recorded status (2026-07-26, node efficiency pass)
 
 Three stacked, individually measured changes took GTX 1080 generation from
