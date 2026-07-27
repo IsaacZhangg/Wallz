@@ -287,6 +287,34 @@ with the in-flight shard saved and the canary re-verified. Every latch
 was triggered by a train↔generate P-state transition; generation-side
 latches are now 4-for-4 on those transitions.
 
+**Fault audit (2026-07-27 morning) — the latch is driver-side, not our
+configuration.** Every our-fault hypothesis was tested and excluded:
+(1) we never set clock locks — no `-lgc`/`-ac` anywhere, and this board
+reports Applications Clocks unsupported (N/A); (2) the offset is applied
+via `GPUGraphicsClockOffsetAllPerformanceLevels` — the same attribute
+NVIDIA's own GUI uses, and the documented-correct method for Pascal
+(offsets apply to all perf levels); (3) the decisive observation:
+healthy and latched runs are BOTH in P2 with identical queried config
+(offset 125 on all levels) — healthy sustains 1860-2025 MHz, latched
+pins exactly stock-sustained 1670, so the driver reports one thing and
+does another; (4) one trigger was `nvidia-smi -pl` alone, which never
+touches the offset path; (5) zero Xid/NVRM/Xorg errors across all
+boots (580.173.02); (6) re-applying the identical config sometimes
+fixes it minutes later (2 of 5 self-heals) — replaying unchanged
+config can only matter if hidden driver state is flaky. External
+record: silent regressions in this exact subsystem (offsets/fan/
+PowerMizer acknowledged but not honored) recur across driver branches
+(390→580 reports; a 520-branch report shows `-lgc` acknowledged and
+ignored the same way), and Pascal's forced-P2 compute transitions are
+notoriously janky (the SETI community built `keepP2` — a tiny
+always-on CUDA kernel — specifically because 10-series cards misbehave
+at compute-load boundaries). Residual uncertainty: no public report of
+this exact 1670-latch signature was found; a VBIOS interaction can't be
+excluded. Definitive test if ever needed: driver downgrade. Promising
+prevention candidate from the audit: a keepP2-style keep-alive kernel
+across the train↔generate handoff, so the card never leaves P2 —
+the latch is 5-for-5 on exactly those transitions.
+
 ## Recorded status (2026-07-26, node efficiency pass)
 
 Three stacked, individually measured changes took GTX 1080 generation from
