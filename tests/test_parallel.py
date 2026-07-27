@@ -143,6 +143,64 @@ def test_parallel_self_play_surfaces_evaluator_failures() -> None:
         )
 
 
+def test_eval_cache_dedups_within_and_across_batches() -> None:
+    from wallzero.parallel import _EvalCache, _resolve_with_cache
+
+    cache = _EvalCache(capacity=64)
+    rng = np.random.default_rng(3)
+    unique: np.typing.NDArray[np.float32] = rng.random((4, 13, 9, 9)).astype(
+        np.float32
+    )
+    # Rows 4 and 5 duplicate rows 0 and 1 within the same batch.
+    batch: np.typing.NDArray[np.float32] = np.concatenate([unique, unique[:2]])
+
+    miss_planes, assemble = _resolve_with_cache(cache, batch)
+    assert miss_planes is not None and len(miss_planes) == 4
+    miss_logits = rng.random((4, 209), dtype=np.float32)
+    miss_values = rng.random(4, dtype=np.float32)
+    logits, values = assemble(miss_logits, miss_values)
+    assert np.array_equal(logits[:4], miss_logits)
+    assert np.array_equal(logits[4:], miss_logits[:2])
+    assert np.array_equal(values[4:], miss_values[:2])
+    assert cache.hits == 2 and cache.misses == 4
+
+    # A repeat batch is fully served from the cache.
+    miss_planes, assemble = _resolve_with_cache(cache, unique)
+    assert miss_planes is None
+    logits, values = assemble(None, None)
+    assert np.array_equal(logits, miss_logits)
+    assert np.array_equal(values, miss_values)
+    assert cache.hits == 6
+
+
+def test_parallel_self_play_with_eval_cache_reduces_evaluated_rows() -> None:
+    mcts = MCTSConfig(simulations=12, max_plies=32, leaf_batch=4)
+    config = SelfPlayConfig(games=4, parallel_games=2, temperature_moves=6, seed=23)
+
+    def run(entries: int) -> tuple[int, int]:
+        rows = 0
+
+        def counting(planes: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            nonlocal rows
+            rows += len(planes)
+            return (
+                np.zeros((len(planes), 209), dtype=np.float32),
+                np.zeros((len(planes),), dtype=np.float32),
+            )
+
+        _, stats = generate_self_play_parallel(
+            counting, mcts, config, workers=2, eval_cache_entries=entries
+        )
+        return rows, stats.positions
+
+    uncached_rows, uncached_positions = run(0)
+    cached_rows, cached_positions = run(100_000)
+    # Same seeds and a state-independent evaluator: identical trajectories,
+    # strictly fewer rows reaching the evaluator (openings repeat).
+    assert cached_positions == uncached_positions
+    assert cached_rows < uncached_rows
+
+
 def test_partition_pairs_keeps_color_pairs_whole() -> None:
     from wallzero.parallel import _partition_pairs
 

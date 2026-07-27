@@ -15,12 +15,15 @@ remain the durable source of truth.
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import queue
 import time
 import traceback
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, replace
+from hashlib import blake2b
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from threading import Thread
@@ -161,6 +164,95 @@ def _actor_main(
         requests.put(_WorkerExit(worker_id))
 
 
+class _EvalCache:
+    """Bounded LRU of evaluator outputs keyed by the exact input planes.
+
+    Self-play re-encounters positions constantly: every concurrent game
+    shares the opening, transpositions recur inside searches, and subtrees
+    dropped by ``advance`` get re-searched a move later. A hit returns what
+    the network already produced for that exact encoding, trading idle CPU
+    and RAM for saved GPU forwards. One instance lives per server run, so
+    entries can never outlive the checkpoint that produced them; the cached
+    result differs from a recompute only by the already-accepted
+    batch-composition float noise.
+    """
+
+    def __init__(self, capacity: int) -> None:
+        self.capacity = capacity
+        self.entries: OrderedDict[bytes, tuple[FloatArray, np.float32]] = OrderedDict()
+        self.hits = 0
+        self.misses = 0
+
+    @staticmethod
+    def digest(plane: FloatArray) -> bytes:
+        return blake2b(plane.tobytes(), digest_size=16).digest()
+
+    def report(self) -> dict[str, float | int]:
+        total = self.hits + self.misses
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": round(self.hits / total, 4) if total else 0.0,
+            "entries": len(self.entries),
+        }
+
+
+def _resolve_with_cache(
+    cache: _EvalCache, planes: FloatArray
+) -> tuple[FloatArray | None, Callable[[Any, Any], tuple[FloatArray, FloatArray]]]:
+    """Split a batch into cache hits and unique misses.
+
+    Returns the planes still needing the network (None when everything is
+    known) and an ``assemble(miss_logits, miss_values)`` closure that scatters
+    cached and fresh rows back into full-batch arrays and stores the fresh
+    rows in the cache. Duplicate rows within one batch are computed once.
+    """
+    keys = [cache.digest(plane) for plane in planes]
+    unique_index: dict[bytes, int] = {}
+    row_slots: list[int] = []
+    cached_rows: dict[int, tuple[FloatArray, np.float32]] = {}
+    miss_rows: list[int] = []
+    for row, key in enumerate(keys):
+        slot = unique_index.get(key)
+        if slot is not None:
+            cache.hits += 1
+            row_slots.append(slot)
+            continue
+        entry = cache.entries.get(key)
+        if entry is not None:
+            cache.entries.move_to_end(key)
+            cache.hits += 1
+            cached_rows[row] = entry
+            row_slots.append(-1)
+            continue
+        cache.misses += 1
+        unique_index[key] = len(miss_rows)
+        miss_rows.append(row)
+        row_slots.append(len(miss_rows) - 1)
+    miss_planes = planes[miss_rows] if miss_rows else None
+
+    def assemble(
+        miss_logits: Any, miss_values: Any
+    ) -> tuple[FloatArray, FloatArray]:
+        logits = np.empty((len(planes), ACTION_SIZE), dtype=np.float32)
+        values = np.empty((len(planes),), dtype=np.float32)
+        for row, slot in enumerate(row_slots):
+            if slot >= 0:
+                logits[row] = miss_logits[slot]
+                values[row] = miss_values[slot]
+            else:
+                cached_logits, cached_value = cached_rows[row]
+                logits[row] = cached_logits
+                values[row] = cached_value
+        for key, slot in unique_index.items():
+            cache.entries[key] = (miss_logits[slot].copy(), miss_values[slot])
+        while len(cache.entries) > cache.capacity:
+            cache.entries.popitem(last=False)
+        return logits, values
+
+    return miss_planes, assemble
+
+
 def _async_planes(evaluator: PlanesEvaluator) -> tuple[Any, Any] | None:
     """Return (submit, collect) when the evaluator supports async batches.
 
@@ -180,11 +272,16 @@ def _serve_evaluations(
     replies: dict[int, Connection],
     processes: dict[int, BaseProcess],
     server_failure: list[str],
+    eval_cache_entries: int = 0,
 ) -> None:
     active = set(replies)
     asyncs = [_async_planes(evaluator) for evaluator in planes_evaluators]
     async_pairs = [pair for pair in asyncs if pair is not None]
     pipelined = len(async_pairs) == len(planes_evaluators)
+    caches = [
+        _EvalCache(eval_cache_entries) if eval_cache_entries > 0 else None
+        for _ in planes_evaluators
+    ]
 
     def drain(block: bool) -> list[_EvalRequest]:
         batch: list[_EvalRequest] = []
@@ -229,22 +326,59 @@ def _serve_evaluations(
     def evaluate_sync(batch: list[_EvalRequest]) -> None:
         for model_index, group in grouped(batch):
             planes = np.concatenate([request.planes for request in group])
-            logits, values = planes_evaluators[model_index](planes)
+            cache = caches[model_index]
+            if cache is None:
+                logits, values = planes_evaluators[model_index](planes)
+            else:
+                miss_planes, assemble = _resolve_with_cache(cache, planes)
+                miss = (
+                    planes_evaluators[model_index](miss_planes)
+                    if miss_planes is not None
+                    else (None, None)
+                )
+                logits, values = assemble(*miss)
             reply(group, logits, values)
 
-    def submit(batch: list[_EvalRequest]) -> list[tuple[int, list[_EvalRequest], Any]]:
+    def submit(
+        batch: list[_EvalRequest],
+    ) -> list[tuple[int, list[_EvalRequest], Any, Any]]:
         flight = []
         for model_index, group in grouped(batch):
             planes = np.concatenate([request.planes for request in group])
             submit_planes, _ = async_pairs[model_index]
-            flight.append((model_index, group, submit_planes(planes)))
+            cache = caches[model_index]
+            if cache is None:
+                flight.append((model_index, group, submit_planes(planes), None))
+                continue
+            miss_planes, assemble = _resolve_with_cache(cache, planes)
+            pending = submit_planes(miss_planes) if miss_planes is not None else None
+            flight.append((model_index, group, pending, assemble))
         return flight
 
-    def collect(flight: list[tuple[int, list[_EvalRequest], Any]]) -> None:
-        for model_index, group, pending in flight:
+    def collect(flight: list[tuple[int, list[_EvalRequest], Any, Any]]) -> None:
+        for model_index, group, pending, assemble in flight:
             _, collect_planes = async_pairs[model_index]
-            logits, values = collect_planes(pending)
+            miss = collect_planes(pending) if pending is not None else (None, None)
+            if assemble is None:
+                logits, values = miss
+            else:
+                logits, values = assemble(*miss)
             reply(group, logits, values)
+
+    def emit_cache_stats() -> None:
+        for model_index, cache in enumerate(caches):
+            if cache is not None:
+                print(
+                    json.dumps(
+                        {
+                            "event": "eval-cache",
+                            "model": model_index,
+                            **cache.report(),
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
 
     try:
         if not pipelined:
@@ -252,12 +386,13 @@ def _serve_evaluations(
                 batch = drain(block=True)
                 if batch:
                     evaluate_sync(batch)
+            emit_cache_stats()
             return
         # Pipelined: while the GPU runs batch N, keep draining requests into
         # batch N+1 and submit it the moment N finishes, so reply
         # serialization and queue work overlap GPU compute instead of
         # leaving the device idle between forward passes.
-        in_flight: list[tuple[int, list[_EvalRequest], Any]] | None = None
+        in_flight: list[tuple[int, list[_EvalRequest], Any, Any]] | None = None
         backlog: list[_EvalRequest] = []
         while active or in_flight is not None or backlog:
             if in_flight is None:
@@ -266,7 +401,9 @@ def _serve_evaluations(
                     in_flight = submit(backlog)
                     backlog = []
                 continue
-            if not all(pending.ready() for _, _, pending in in_flight):
+            if not all(
+                pending is None or pending.ready() for _, _, pending, _ in in_flight
+            ):
                 gathered = drain(block=False)
                 if gathered:
                     backlog.extend(gathered)
@@ -277,6 +414,7 @@ def _serve_evaluations(
             backlog = []
             collect(in_flight)
             in_flight = next_flight
+        emit_cache_stats()
     except Exception:
         server_failure.append(traceback.format_exc())
         for connection in replies.values():
@@ -288,6 +426,7 @@ def _run_distributed(
     actor: Callable[..., None],
     payloads: dict[int, Any],
     on_progress: Callable[[dict[int, Any]], None] | None,
+    eval_cache_entries: int = 0,
 ) -> tuple[dict[int, Any], dict[int, Any]]:
     """Spawn one actor per payload; return (done payloads, final progress)."""
     context = mp.get_context("spawn")
@@ -310,7 +449,14 @@ def _run_distributed(
     server_failure: list[str] = []
     server = Thread(
         target=_serve_evaluations,
-        args=(planes_evaluators, requests, replies, processes, server_failure),
+        args=(
+            planes_evaluators,
+            requests,
+            replies,
+            processes,
+            server_failure,
+            eval_cache_entries,
+        ),
         daemon=True,
     )
     server.start()
@@ -391,6 +537,7 @@ def generate_self_play_parallel(
     workers: int,
     progress: Callable[[SelfPlayStats], None] | None = None,
     initial_state: State | None = None,
+    eval_cache_entries: int = 0,
 ) -> tuple[list[TrainingExample], SelfPlayStats]:
     """Run generate_self_play across worker processes with central batching."""
     if workers < 2:
@@ -417,7 +564,11 @@ def generate_self_play_parallel(
             progress(merged)
 
     outputs, final_progress = _run_distributed(
-        [planes_evaluator], _self_play_actor, payloads, on_progress
+        [planes_evaluator],
+        _self_play_actor,
+        payloads,
+        on_progress,
+        eval_cache_entries=eval_cache_entries,
     )
     examples = [
         example for worker_id in sorted(outputs) for example in outputs[worker_id]
@@ -446,6 +597,7 @@ def evaluate_candidate_parallel(
     workers: int,
     progress: Callable[[ArenaResult], None] | None = None,
     initial_state: State | None = None,
+    eval_cache_entries: int = 0,
 ) -> ArenaResult:
     """Run the color-balanced arena across worker processes.
 
@@ -470,6 +622,10 @@ def evaluate_candidate_parallel(
             progress(_merge_arena_results(latest))
 
     _, final_progress = _run_distributed(
-        [candidate_planes, incumbent_planes], _arena_actor, payloads, on_progress
+        [candidate_planes, incumbent_planes],
+        _arena_actor,
+        payloads,
+        on_progress,
+        eval_cache_entries=eval_cache_entries,
     )
     return _merge_arena_results(final_progress)

@@ -34,5 +34,6 @@ if __name__ == "__main__":
         forced_playout_scale=2.0,
         root_policy_temperature=1.2,
         dirichlet_concentration=10.83,
+        eval_cache_entries=int(os.environ.get("WALLZERO_EVAL_CACHE", "0")),
         device_name=os.environ.get("WALLZERO_DEVICE", "cuda"),
     )

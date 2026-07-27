@@ -197,32 +197,53 @@ ending a compute session does not turn an early checkpoint into an expert one.
 
 ## Recorded status (2026-07-26, node efficiency pass)
 
-Generation on the GTX 1080 measured 4.42 pos/s on a full 96-game
-production-recipe chunk (5,225 positions, 19.7 min) against 3.92-4.01
-across the five chunks before it — **+11.6%**, attributable to frozen
-TorchScript inference (`torch.jit.trace` + `freeze` +
-`optimize_for_inference`: batchnorm folding plus NNC elementwise/SE
-fusion; +11.4% in the isolated kernel bench at batch 512, max logit
-deviation 1.8e-4 — the same order as batchnorm folding alone). The freeze
-is gated to fp32 CUDA inference (pre-Ampere) because autocast does not
-apply inside TorchScript; the A100 bf16 path and the Mac's MPS path keep
-the eager module. The eval server also gained an async submit/collect
-pipeline (pinned staging buffers, CUDA events) overlapping queue draining
-and reply serialization with GPU compute — measured neutral on top of the
-freeze: back-to-back forwards with zero server logic draw the same
-~150-160W as live generation, so the server was not leaving meaningful GPU
-idle and power draw is not a utilization proxy for this workload (the
-wedge-log 176-205W was a different phase mix). Measured and rejected on
-this card: fp16 inference (pseudo-half, 7-10% *slower*, 1000x the
-deviation — Pascal has no usable fp16), inference-side cuDNN autotune and
-eager batchnorm folding (≤1% each), and fp16-vs-fp32 training at batch 512
-(now identical at 1.045 vs 1.047 s/step once cuDNN autotune is active; the
-07-25 bench that showed fp16 at 57 min predated autotune). Training rounds
-stay ~52 min — that is the card's fp32 compute floor for the 3,000-step
-recipe. Known remaining headroom: GPU Boost holds the SM at 1670 MHz in P2
-(boost table allows 1974); raising it needs Coolbits in xorg.conf plus an
-X restart, deferred as a user decision. With ~20-min chunks the flywheel
-now trains (52 min) after every ~80 min of generation.
+Three stacked, individually measured changes took GTX 1080 generation from
+3.96 pos/s (~22-min 96-game chunks) to **7.05 pos/s (12.8-min chunks,
++78%)**, each verified on full production-recipe chunks:
+
+1. **Frozen TorchScript inference (+11.6%, chunks 121/123 at 4.31-4.42):**
+   `torch.jit.trace` + `freeze` + `optimize_for_inference` in
+   `TorchEvaluator` folds batchnorm and NNC-fuses the elementwise/SE
+   chains (max logit deviation 1.8e-4, the same order as batchnorm folding
+   alone). Gated to fp32 CUDA (pre-Ampere) because autocast does not apply
+   inside TorchScript; the A100 bf16 and MPS paths keep the eager module.
+2. **Position-evaluation cache (+44%, chunk 124 at 6.21):** the eval
+   server keys a bounded LRU (400K entries, ~0.5GB, `WALLZERO_EVAL_CACHE`)
+   on a BLAKE2b digest of the exact input planes; **32% of all evaluation
+   requests repeat** (shared openings across 96 concurrent games,
+   transpositions, re-searched subtrees) and now cost a RAM lookup instead
+   of a GPU forward. Off by default; hit/miss stats print at chunk end.
+   Idle CPU/RAM buying back GPU forwards was the only productive use found
+   for the mostly idle i7 — extra workers cannot add throughput at the
+   inference roofline.
+3. **GPU clock offsets via Coolbits (+13.6%, chunk 125 at 7.05):** fan
+   pinned at 80% (76→57-70C) plus +100 MHz core / +800 MT/s memory
+   offsets, no overvoltage, stock 198W power limit kept as a guard.
+   Sustained compute clocks went 1670→1822-1898 MHz and P2 memory
+   4513→4911 (still under its own 5005 spec). Every step passed a
+   bitwise-repeatability canary (`scripts/node_gpu_canary.py` — clocks do
+   not change math, so any output deviation is a silent compute error) and
+   a training-loss sanity bench; offsets reset on X restart/reboot and are
+   re-applied with `scripts/node_gpu_oc.sh 100 800 80` (deployed at
+   `~/wallzero/gpu-oc.sh`). Canary caveat learned: TorchScript's profiling
+   executor uses different kernels on the first calls, so references must
+   be recorded after warmup.
+
+The eval server also gained an async submit/collect pipeline (pinned
+staging buffers, CUDA events) overlapping queue draining and reply
+serialization with GPU compute — measured neutral (back-to-back forwards
+with zero server logic draw the same wattage as live generation, so the
+server never left meaningful GPU idle; power draw is not a utilization
+proxy for this workload). Measured and rejected on this card: fp16
+inference (pseudo-half, 7-10% *slower*, 1000x the deviation — Pascal has
+no usable fp16), inference-side cuDNN autotune and eager batchnorm folding
+(≤1% each), and fp16-vs-fp32 training at batch 512 (identical at ~1.05
+s/step once cuDNN autotune is active; the 07-25 bench showing fp16 at 57
+min predated autotune). Training rounds project ~50 min under the OC —
+near the card's compute floor for the 3,000-step recipe. With ~13-min
+chunks the flywheel now trains (~50 min) after every ~52 min of
+generation; the train/generate cadence itself stays fixed per the
+pre-declared data-volume test design.
 
 ## Recorded status (2026-07-26 overnight)
 

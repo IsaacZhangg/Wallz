@@ -131,6 +131,7 @@ def run_self_play_chunk(
     forced_playout_scale: float | None = None,
     root_policy_temperature: float | None = None,
     dirichlet_concentration: float | None = None,
+    eval_cache_entries: int = 0,
     device_name: str = "auto",
 ) -> Path:
     """Generate and fsync one replay shard before returning control.
@@ -213,6 +214,7 @@ def run_self_play_chunk(
                 self_play_config,
                 workers=workers,
                 progress=report,
+                eval_cache_entries=eval_cache_entries,
             )
         else:
             examples, stats = generate_self_play(

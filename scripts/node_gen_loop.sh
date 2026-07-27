@@ -15,6 +15,10 @@ export WALLZERO_OUTPUT="$HOME/wallzero/output/wallzero-output"
 export WALLZERO_WORKERS="${WALLZERO_WORKERS:-12}"
 export WALLZERO_LEAF_BATCH="${WALLZERO_LEAF_BATCH:-16}"
 export WALLZERO_GAMES="${WALLZERO_GAMES:-96}"
+# Position-eval cache in the eval server: dedups repeated positions across
+# concurrent games/searches so idle CPU+RAM buy back GPU forwards
+# (~400K entries ~= 0.5GB; 0 disables).
+export WALLZERO_EVAL_CACHE="${WALLZERO_EVAL_CACHE:-400000}"
 export WALLZERO_DEVICE=cuda
 # Pause file: touch ~/wallzero/PAUSE to let a training round own the GPU;
 # remove it to resume generation without restarting the loop.
