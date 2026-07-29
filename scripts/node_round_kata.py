@@ -31,6 +31,13 @@ from wallzero.pipeline import preset
 
 BATCH = 512
 MAX_TRAIN_PER_DATA = 8  # KataGo synchronous_loop.sh MAX_TRAIN_PER_DATA
+# KataGo trains with a continuous piecewise-CONSTANT learning rate across
+# the whole run — it never anneals per cycle. Our per-round warmup+cosine
+# (2e-3 -> 2e-5 inside every round) was a WallZero-only invention; with
+# era-3's short rounds it meant a 100x LR swing every ~7 minutes. Setting
+# lr == min_lr collapses the schedule to warmup-then-flat (audit round 2,
+# 2026-07-29). 3e-4 approximates the old cosine's time-weighted average.
+CONSTANT_LR = float(os.environ.get("WALLZERO_LR", "3e-4"))
 
 if __name__ == "__main__":
     output = Path(
@@ -43,9 +50,18 @@ if __name__ == "__main__":
         if steps_env
         else min(3_000, max(150, fresh * MAX_TRAIN_PER_DATA // BATCH))
     )
+    base = preset("colab")
     run_training_round(
         output,
-        replace(preset("colab"), replay_window=10_000_000),
+        replace(
+            base,
+            replay_window=10_000_000,
+            train=replace(
+                base.train,
+                learning_rate=CONSTANT_LR,
+                minimum_learning_rate=CONSTANT_LR,
+            ),
+        ),
         training_steps=steps,
         arena_games=0,
         device_name=os.environ.get("WALLZERO_DEVICE", "cuda"),

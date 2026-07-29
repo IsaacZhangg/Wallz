@@ -69,3 +69,55 @@ calibrating the threshold against a day or two of recorded per-chunk
 surprise; note KataGo itself uses no such trigger (its async loop trains
 continuously), so this is a WallZero-specific efficiency experiment and
 must be evaluated against the fixed-cadence baseline.
+
+## Audit round 2 (2026-07-29 morning): methodology internals
+
+Compared `python/train.py`, `python/katago/train/*`, selfplay1.cfg, and
+KataGoMethods.md against `src/wallzero/{training,mcts,selfplay}.py`.
+
+**Fixed immediately:**
+
+- **LR continuity** (the queued item, now confirmed a genuine deviation):
+  KataGo trains with a continuous piecewise-constant LR scale across the
+  entire run — there is no per-cycle annealing of any kind. Our per-round
+  warmup+cosine (2e-3 → 2e-5) was a WallZero invention; with era-3's
+  ~330-step rounds it swung the LR 100× every ~7 minutes, a plausible
+  source of the churn seen in the round-67 anchor match (0.455) and
+  elevated losses. Fixed by collapsing the schedule to warmup-then-flat
+  at a constant 3e-4 (`WALLZERO_LR`), the time-weighted average of the
+  old cosine. Landed at round ~68, inside the era-3 measurement window —
+  noted so the anchor trajectory is read accordingly.
+
+**Verified aligned this pass:**
+
+- FPU reduction 0.2 — exactly KataGo's `fpuReductionMax` default.
+- Fast-search moves excluded from the policy loss (policy_weight mask);
+  value trains on all rows. Matches KataGo's cheap-search handling.
+- Surprise weights drive batch sampling (weighted `rng.choice`) — the
+  in-training analog of KataGo's row weighting.
+- Mirror augmentation (p=0.5; Quoridor's symmetry group), gradient
+  clipping, forced playouts + pruned policy targets, shaped Dirichlet.
+
+**Informed differences, kept deliberately:**
+
+- cPUCT: ours are AlphaZero's published constants (pb_c_init 1.25, base
+  19652); KataGo uses cpuct 1.0 + 0.45·log growth. Both are reference
+  recipes; ours follows AZ. Not a bug.
+
+**Queued (in rough priority order):**
+
+1. **Value loss weight**: KataGo scales value loss by 0.6 vs policy;
+   ours is 1.0. Relevant because era-3 value loss is elevated (~0.23) —
+   downweighting is the reference behavior. Cheap, but wait for the
+   anchor verdict before another training-loss change.
+2. **SWA** (AveragedModel, ~80K-sample period) — KataGo credits it with
+   real strength; needs round-spanning averaging design in our loop.
+3. **Optimizer state continuity**: KataGo's optimizer runs continuously;
+   ours re-initializes AdamW each round (warmup mitigates). Persist
+   optimizer state across rounds alongside best.pt.
+4. Optimizer family (KataGo: SGD-momentum classically, Muon variants
+   now; ours AdamW) and soft-policy auxiliary target (weight 8.0) —
+   larger changes, evaluate only if the loop is healthy but slow.
+5. Temperature curve: KataGo 0.75 → 0.15 with halflife 19; ours 1.0 for
+   24 moves → 0.05. Slightly more early exploration, sharper endgames.
+   Minor; align only with measurement.
