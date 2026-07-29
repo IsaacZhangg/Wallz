@@ -51,6 +51,12 @@ class SelfPlayStats:
     repetition_draws: int = 0
     max_ply_draws: int = 0
     solver_moves: int = 0
+    # Aggregate policy surprise over full-search moves (policy_weight >= 1),
+    # exposed per chunk so the flywheel can eventually trigger training on
+    # "the model is out of date" instead of a fixed shard count. Stored as
+    # sum + count (not mean) so per-worker stats merge by addition.
+    surprise_sum: float = 0.0
+    surprise_moves: int = 0
     elapsed_seconds: float = 0.0
 
     @property
@@ -267,6 +273,10 @@ def generate_self_play(
                     )
                 stats.games += 1
                 stats.positions += len(game.history)
+                for entry in game.history:
+                    if entry[3] >= 1.0:
+                        stats.surprise_sum += entry[4]
+                        stats.surprise_moves += 1
             if finished and progress is not None:
                 stats.elapsed_seconds = time.monotonic() - started
                 progress(stats)

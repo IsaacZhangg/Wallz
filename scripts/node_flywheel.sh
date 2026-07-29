@@ -1,8 +1,8 @@
 #!/bin/bash
-# WallZero auto-flywheel for the isaac-pc node: whenever FLYWHEEL_CHUNKS new
-# replay shards exist (its own generation or manually merged Mac/Colab
-# shards — it only counts files), it pauses the generation loop, trains one
-# gateless round, adopts the result, and resumes generation.
+# WallZero auto-flywheel for the isaac-pc node: whenever ~FLYWHEEL_POSITIONS
+# fresh positions have been generated (summed from chunk-metrics.jsonl), it
+# pauses the generation loop, trains one gateless round, adopts the result,
+# and resumes generation.
 #
 # Runs alongside gen_loop.sh, which owns generation and its watchdogs.
 # Respects a PAUSE file it did not create (manual interventions win), and
@@ -16,11 +16,24 @@
 # timeout with the GPU idle and generation paused).
 cd "$HOME/wallzero" || exit 1
 OUT="$HOME/wallzero/output/wallzero-output"
-THRESHOLD=${FLYWHEEL_CHUNKS:-4}
+# Era-3 trigger: train per ~21K fresh POSITIONS (four 96-game chunks' worth),
+# not per shard file — shard sizes have drifted twice, so file count is a
+# drifting proxy. Positions are summed from chunk-metrics.jsonl lines
+# appended since the last adoption (note: shards merged from other machines
+# without metrics lines are invisible to this trigger). Surprise-based
+# triggering stays deferred until the era-3 window verdict; the per-chunk
+# surprise aggregates now landing in chunk metrics are its calibration data.
+METRICS="$OUT/chunk-metrics.jsonl"
+POS_THRESHOLD=${FLYWHEEL_POSITIONS:-21000}
 PAUSE="$HOME/wallzero/PAUSE"
 
 log() { echo "[flywheel] $(date -Is) $*"; }
 count_shards() { ls "$OUT/replay"/chunk-*.npz 2>/dev/null | wc -l; }
+metrics_lines() { wc -l <"$METRICS" 2>/dev/null | tr -d " " || echo 0; }
+new_positions() {
+  tail -n +"$((base_lines + 1))" "$METRICS" 2>/dev/null |
+    awk -F'"examples": ' 'NF>1 {split($2,a,","); s+=a[1]} END {printf "%d", s+0}'
+}
 is_num() { case "$1" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 # A previous flywheel instance may have died mid-round: its tagged pause
@@ -37,15 +50,15 @@ release_pause() { # only remove the pause if it is still ours
   head -1 "$PAUSE" 2>/dev/null | grep -q "^flywheel:$$\$" && rm -f "$PAUSE"
 }
 
-# The shard baseline persists across restarts: without this, every restart
+# The baseline persists across restarts: without this, every restart
 # (crash, reboot, systemd Restart=always) forgot progress toward the next
-# round and postponed training by up to a full threshold of chunks.
-LAST_FILE="$HOME/wallzero/.flywheel-last"
-last=$(cat "$LAST_FILE" 2>/dev/null)
-is_num "$last" || last=$(count_shards)
-[ "$last" -gt "$(count_shards)" ] && last=$(count_shards) # shards renumbered/removed
-echo "$last" >"$LAST_FILE"
-log "started; $(count_shards) shards, baseline $last, training every $THRESHOLD new"
+# round and postponed training by up to a full threshold of fresh data.
+LAST_FILE="$HOME/wallzero/.flywheel-baseline-lines"
+base_lines=$(cat "$LAST_FILE" 2>/dev/null)
+is_num "$base_lines" || base_lines=$(metrics_lines)
+[ "$base_lines" -gt "$(metrics_lines)" ] && base_lines=$(metrics_lines) # log rotated
+echo "$base_lines" >"$LAST_FILE"
+log "started; $(count_shards) shards, metrics baseline line $base_lines, training every ${POS_THRESHOLD} fresh positions"
 # Era-3 guardrail: node_anchor_match.py writes REGRESSION-ALARM when the
 # current best scores <0.40 against the standing anchor. While it exists,
 # training rounds are suspended (generation continues) until a human
@@ -63,10 +76,11 @@ while true; do
     sleep 1680
     continue
   fi
-  now=$(count_shards)
-  [ $((now - last)) -lt "$THRESHOLD" ] && continue
+  fresh=$(new_positions)
+  is_num "$fresh" || fresh=0
+  [ "$fresh" -lt "$POS_THRESHOLD" ] && continue
 
-  log "$((now - last)) new shards; pausing generation"
+  log "$fresh fresh positions; pausing generation"
   echo "flywheel:$$" >"$PAUSE"
   while pgrep -f "node_chunk_kata[.]py" >/dev/null; do sleep 30; done
   log "training round starting"
@@ -106,8 +120,8 @@ while true; do
   release_pause
   if [ "$rc" -eq 0 ]; then
     log "round adopted; generation resumed"
-    last=$(count_shards)
-    echo "$last" >"$LAST_FILE"
+    base_lines=$(metrics_lines)
+    echo "$base_lines" >"$LAST_FILE"
     timeout 30m bash "$HOME/wallzero/backup.sh" >>"$HOME/wallzero/backup.log" 2>&1 ||
       log "backup failed (non-fatal, cron will retry)"
   else
