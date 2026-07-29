@@ -121,3 +121,38 @@ KataGoMethods.md against `src/wallzero/{training,mcts,selfplay}.py`.
 5. Temperature curve: KataGo 0.75 → 0.15 with halflife 19; ours 1.0 for
    24 moves → 0.05. Slightly more early exploration, sharper endgames.
    Minor; align only with measurement.
+
+## Audit round 3 (2026-07-29): full selfplay1.cfg + KataGoMethods fine print
+
+**The headline find — a large implemented-but-dormant feature:** KataGo's
+self-play config runs `subtreeValueBiasFactor = 0.30` /
+`subtreeValueBiasWeightExponent = 0.8` — the subtree value-bias
+correction KataGoMethods credits with **+30-60 Elo**, their largest
+single search improvement. WallZero implemented this (config-gated,
+`ab_search.py --subtree-bias`) and left it OFF, unmeasured. A/B running
+(100 games, KataGo's constants, seed 1210001); enable in self-play and
+serve if the pooled evidence confirms.
+
+**Feature gaps found (queued, priority order):**
+
+1. **Game-diversity cluster — we have NONE of it**: `initGamesWithPolicy`
+   (first ~3 moves sampled hot from the raw policy, no search),
+   `earlyForkGameProb 0.04` / `forkGameProb 0.01` (fork games into
+   alternative lines), `sidePositionProb 0.02` (record refutations of
+   tempting bad moves). This cluster exists to prevent opening-diversity
+   collapse — the exact echo-chamber failure era 2 died of. Highest-value
+   feature work after the era-3 verdict.
+2. `reduceVisits = true` (≥0.9 winrate for 3 turns → 100 visits, row
+   weight 0.1): saves compute on decided games; more chunks/day.
+3. `valueSurpriseDataWeight = 0.1` on top of policy surprise (our 0.5
+   matches their `policySurpriseDataWeight` exactly).
+4. Root symmetry averaging (`rootNumSymmetriesToSample = 4`; Quoridor's
+   symmetry group supports 2).
+
+**Verified aligned this pass:** no resignation in their self-play (ours
+plays to terminal — correct); `cheapSearchTargetWeight = 0` ↔ our policy
+mask; surprise weight split 0.5 exact; `switchNetsMidGame` ↔ our
+per-chunk best.pt reload; maxVisits 600 / cheap 100 / p(cheap) 0.75 ↔
+our 800/200/0.75; root temp 1.25→1.1 (ours flat 1.2 — within their
+range); LCB-in-selfplay is on for them, ours measured neutral (3×200
+pooled) and stays off by evidence.
