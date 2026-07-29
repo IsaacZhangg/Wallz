@@ -46,10 +46,23 @@ is_num "$last" || last=$(count_shards)
 [ "$last" -gt "$(count_shards)" ] && last=$(count_shards) # shards renumbered/removed
 echo "$last" >"$LAST_FILE"
 log "started; $(count_shards) shards, baseline $last, training every $THRESHOLD new"
+# Era-3 guardrail: node_anchor_match.py writes REGRESSION-ALARM when the
+# current best scores <0.40 against the standing anchor. While it exists,
+# training rounds are suspended (generation continues) until a human
+# investigates and removes it — the era-2 flat lineage ran 28 rounds with
+# no such brake.
+ALARM="$HOME/wallzero/REGRESSION-ALARM"
+ROUNDS_FILE="$HOME/wallzero/.rounds-since-anchor"
+
 while true; do
   sleep 120
   [ -f "$PAUSE" ] && continue
   pgrep -f "node_round_kata[.]py" >/dev/null && continue
+  if [ -f "$ALARM" ]; then
+    log "REGRESSION-ALARM present; training suspended (generation continues)"
+    sleep 1680
+    continue
+  fi
   now=$(count_shards)
   [ $((now - last)) -lt "$THRESHOLD" ] && continue
 
@@ -74,6 +87,22 @@ while true; do
   done
   wait "$round_pid"
   rc=$?
+  if [ "$rc" -eq 0 ]; then
+    # Anchor ladder: every 5th adopted round, measure best.pt against the
+    # standing anchor while the GPU is still ours (PAUSE held). ~15-25 min;
+    # promotes at >=0.60, writes REGRESSION-ALARM at <0.40.
+    rounds=$(cat "$ROUNDS_FILE" 2>/dev/null)
+    is_num "$rounds" || rounds=0
+    rounds=$((rounds + 1))
+    if [ "$rounds" -ge 5 ]; then
+      log "anchor match starting (5 rounds since last)"
+      timeout 60m .venv/bin/python scripts/node_anchor_match.py \
+        >>"$HOME/wallzero/anchor.log" 2>&1 ||
+        log "anchor match failed (non-fatal); see anchor.log"
+      rounds=0
+    fi
+    echo "$rounds" >"$ROUNDS_FILE"
+  fi
   release_pause
   if [ "$rc" -eq 0 ]; then
     log "round adopted; generation resumed"

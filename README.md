@@ -195,6 +195,31 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-28, era 3: the window fix and the restart)
+
+The data-volume test closed falsified — and the post-mortem found the
+reason it never could have succeeded: training only ever consumed the
+newest 60K positions (~1,100 games, ~26 epochs/round), so generated
+volume accumulated on disk without ever entering the training
+distribution. Full record and measurements in
+`docs/data-volume-test.md` (r59 flat vs both r31 and r14 at 100 games
+each; classical KPI 0-40; verified style drift to move-1 walls).
+
+Era 3 (live since 19:41): node reset to the frozen r31 tag (equal
+measured strength, verified sane style), era-2 shards archived to
+`replay-era2/` on the node (they encode the drifted style), and the
+recipe changed in exactly one place — `node_round_kata.py` now trains
+on ALL accumulated shards with steps scaled to ~3 epochs/round (capped
+at 3,000). New guardrails so a flat or regressing lineage can never
+again run unmeasured: `node_anchor_match.py` plays best.pt vs a frozen
+anchor (100 games, 192 sims, fixed seed) after every 5th adopted round
+— promotion at ≥0.60 re-anchors, <0.40 writes REGRESSION-ALARM which
+suspends training (generation continues) until a human clears it.
+Timeline accumulates in `strength-timeline.jsonl`; anchors live in
+`~/wallzero/anchors/` (r31 base + r59 kept as junk-style control).
+Era-3 prediction, pre-stated: >0.55 vs the r31 anchor within ~10-15
+rounds, or the window hypothesis is falsified too.
+
 ## Recorded status (2026-07-26 evening, node watchdog hardening)
 
 The generation node became self-healing end to end. Context: the P2 clock

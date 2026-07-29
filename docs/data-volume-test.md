@@ -40,3 +40,43 @@ before any evaluation game is played.
   docs/katago-adaptations.md.
 - No strength claims from arena promotions or exploratory 40-game runs in
   either case.
+
+## Outcome (closed 2026-07-28, ended early at ~750K by decision)
+
+**Falsified, per the pre-committed criteria — with a design confound
+discovered in the post-mortem that reframes what was falsified.**
+
+Measurements (2026-07-28 evening, checkpoint r59, deterministic 192-sim
+search, seed 1_190_001, 100 games per pairing; classical matches at the
+declared suite settings, 20 games per sim level):
+
+- vs frozen r31 tag: **0.47 [0.38, 0.57]** — CI contains 0.50 (flat)
+- vs r14 best-gate-passed: **0.48 [0.38, 0.58]** — flat
+- Classical KPI: **0-20 at 160 sims, 0-20 at 800 sims (0.00)** vs baselines
+  0.00 / 0.05 — within +0.05 of baseline
+
+Both falsification conditions hold. The test was ended at ~750K of the 1M
+trigger (user decision after the interim results); the smaller-than-declared
+control samples (100 games vs 3x200 pooled) are noted, but the effect being
+tested for (>0.55) is excluded by both CIs.
+
+**The confound:** training only ever consumed the newest 60,000 positions
+(`load_replay_window` keeps newest-first; 3,000 steps x 512 batch = ~26
+epochs per round over ~1,100 games). Generated volume accumulated on disk
+but never entered the training distribution, so this test falsified "more
+fresh-data *rate* under a fixed 60K window," not data volume in the
+training distribution. AlphaZero/KataGo windows are 2-3 orders of magnitude
+larger and growing. The era-2 lineage also drifted into a wall-heavy style
+(verified: r59 plays a move-1 wall at 283/800 visits where r31 plays the
+book pawn step at 390/800), consistent with each round refitting to its
+own newest games.
+
+**Follow-up (era 3, live 2026-07-28 19:41):** restart from the r31 tag with
+a growing all-data window (~3 epochs/round, steps capped at 3,000), era-2
+shards archived out of the window (they encode the drifted style), and an
+anchor-ladder guardrail (automated 100-game match vs a frozen anchor every
+5 rounds, promotion at >=0.60, REGRESSION-ALARM + training suspension at
+<0.40, timeline in strength-timeline.jsonl). Prediction to hold era 3 to:
+clear separation from the r31 anchor (>0.55) within ~10-15 rounds, else the
+window joins the falsified pile and capacity/targets (per
+docs/katago-adaptations.md) move up.
