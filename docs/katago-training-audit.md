@@ -193,3 +193,32 @@ Net assessment after four dives: scheduling, training loop, self-play
 recipe, and data handling are now reference-faithful; remaining
 divergences are architecture/search projects with measured upside, not
 correctness bugs.
+
+## Audit round 5 (2026-07-29): remaining KataGoMethods + constants sweep
+
+**Verified aligned:** forced playouts use exactly KataGo's coefficient
+(`rootDesiredPerChildVisitsCoeff = 2` ↔ our `forced_playout_scale=2.0`
+in all three chunk entrypoints), and cheap searches correctly disable
+both noise and forced playouts (`selfplay.py` fast path) — matching
+their cheap-search semantics precisely.
+
+**Promoted from the backlog — Dynamic Variance-Scaled cPUCT:** KataGo
+scales cPUCT per node by ~sqrt(empirical playout-utility variance)
+(small prior mixed in for low-visit nodes). Bundled with uncertainty
+weighting it was worth ~75 Elo; ~25-50 of that is attributable to
+better exploration scaling alone. Crucially, unlike uncertainty
+weighting (which needs new error-prediction net heads), variance-scaled
+cPUCT is SEARCH-ONLY — per-node variance tracking, no net changes —
+so it is config-gateable and free to measure via ab_search, same as
+subtree bias. Next search A/B after the subtree-bias verdict.
+
+**Explicitly deferred as net-dependent:** uncertainty-weighted playouts
+(error heads), short-term value targets (aux heads), optimistic policy,
+nested-bottleneck trunks — all feed the architecture project's design
+space rather than the current recipe.
+
+After five rounds the audit is at diminishing returns: remaining
+unread KataGo material is Go-specific (rules/komi/scoring machinery) or
+already represented in the queue. The standing defense is the audit
+habit itself: any new WallZero mechanism gets checked against this doc
+and the reference before it ships.
