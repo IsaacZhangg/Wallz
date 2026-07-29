@@ -156,3 +156,40 @@ per-chunk best.pt reload; maxVisits 600 / cheap 100 / p(cheap) 0.75 ↔
 our 800/200/0.75; root temp 1.25→1.1 (ours flat 1.2 — within their
 range); LCB-in-selfplay is on for them, ours measured neutral (3×200
 pooled) and stays off by evidence.
+
+## Audit round 4 (2026-07-29): architecture and search-engine internals
+
+**Verified correct (important negatives):**
+
+- **Search-tree reuse between moves exists** (`SearchTree.advance` re-roots
+  after each move in self-play) — no wasted-computation bug.
+- **The eval-server position cache (32% hit rate) already implements the
+  "low-level mitigation" for transpositions** that GraphSearch.md
+  describes — net evals are shared across transposed lines even though
+  search statistics are not.
+- Value head form (scalar tanh + MSE) matches the AlphaZero reference.
+
+**Improvement paths found (both major projects, post-verdict):**
+
+1. **Monte-Carlo Graph Search (MCGS)**: KataGo searches a DAG
+   (`useGraphSearch = true`), sharing search statistics across
+   transpositions, with a dedicated doc on the correct formulation
+   (docs/GraphSearch.md). Quoridor is transposition-HEAVY — wall
+   placements commute, which is exactly why our eval cache hits 32% —
+   so MCGS should pay off disproportionately here: same visit budget,
+   materially deeper effective search, better training targets.
+   Substantial, subtle implementation (KataGo warns of the pitfalls);
+   rank as the top search project.
+2. **Trunk architecture**: KataGo's nets are BatchNorm-free
+   (`norm_kind: fixup`) and interleave **global-pooling blocks** into
+   the trunk (pooled features concatenated into conv layers), letting
+   every layer see board-wide context. Ours is BN+ReLU+SE — SE gives
+   global channel gating (a weaker cousin of gpool). BN in continual RL
+   risks running-stats lag under distribution shift (already ranked in
+   katago-adaptations.md). Architecture changes mean a new net and a
+   warm-start decision — bundle both with any future net-size change.
+
+Net assessment after four dives: scheduling, training loop, self-play
+recipe, and data handling are now reference-faithful; remaining
+divergences are architecture/search projects with measured upside, not
+correctness bugs.
