@@ -7,10 +7,16 @@ the last, knowledge never accumulated, and the lineage measured flat across
 into a wall-heavy style. AlphaZero/KataGo train on windows orders of
 magnitude larger (500K games / growing multi-million-position windows).
 
-Era 3 trains on ALL accumulated shards, with steps scaled to ~3 epochs per
-round and capped at 3,000 (the ~50-minute GPU budget on the 1080). Past
-~512K positions the cap means each round samples under 3 epochs — the
-KataGo-like regime where per-round reuse keeps falling as data grows.
+Era 3 trains on ALL accumulated shards, with the step count governed by
+KataGo's sample-reuse rule, not by epochs over the window: at most
+MAX_TRAIN_PER_DATA training samples per fresh data row
+(synchronous_loop.sh uses 8 and warns larger risks overfitting; the async
+large-scale rule is 4). The flywheel passes the fresh-row count via
+WALLZERO_FRESH_ROWS; steps = 8 x fresh / batch, so a ~21K-position cycle
+trains ~330 steps (~6 min) and the GPU spends ~90% of wall time
+generating. Era 2 ran at ~77 samples per data row — nearly 10x KataGo's
+warning threshold — which is the overfit-to-recent mechanism behind the
+flat lineage.
 
     WALLZERO_OUTPUT=~/wallzero/output/wallzero-output \
     python scripts/node_round_kata.py
@@ -23,21 +29,19 @@ from pathlib import Path
 from wallzero.campaign import run_training_round
 from wallzero.pipeline import preset
 
-MEAN_SHARD_POSITIONS = 5_100  # measured era-2 mean; only steers the step count
 BATCH = 512
-TARGET_EPOCHS = 3
+MAX_TRAIN_PER_DATA = 8  # KataGo synchronous_loop.sh MAX_TRAIN_PER_DATA
 
 if __name__ == "__main__":
     output = Path(
         os.environ.get("WALLZERO_OUTPUT", "artifacts/runs/node/wallzero-output")
     ).expanduser()
-    shards = len(list((output / "replay").glob("chunk-*.npz")))
-    est_positions = shards * MEAN_SHARD_POSITIONS
+    fresh = int(os.environ.get("WALLZERO_FRESH_ROWS", "21000"))
     steps_env = os.environ.get("WALLZERO_STEPS")
     steps = (
         int(steps_env)
         if steps_env
-        else min(3_000, max(500, est_positions * TARGET_EPOCHS // BATCH))
+        else min(3_000, max(150, fresh * MAX_TRAIN_PER_DATA // BATCH))
     )
     run_training_round(
         output,

@@ -25,6 +25,17 @@ OUT="$HOME/wallzero/output/wallzero-output"
 # surprise aggregates now landing in chunk metrics are its calibration data.
 METRICS="$OUT/chunk-metrics.jsonl"
 POS_THRESHOLD=${FLYWHEEL_POSITIONS:-21000}
+# KataGo's synchronous loop refuses to start training before 100K rows
+# exist (SHUFFLE_MINROWS); training a big net on a few chunks of data is
+# pure overfit. ~20 shards at ~5.1K positions clears it.
+MIN_SHARDS_TO_TRAIN=${FLYWHEEL_MIN_SHARDS:-20}
+# Surprise trigger (dynamic cadence phase 2): when FLYWHEEL_SURPRISE is a
+# positive number, train when accumulated surprise_sum since the last round
+# crosses it (with a fresh-position floor of POS_THRESHOLD/2 and a ceiling
+# of 2x POS_THRESHOLD so a mis-set threshold can neither thrash nor stall).
+# Leave unset/0 for the plain position trigger until calibrated from
+# chunk-metrics surprise history.
+SURPRISE_THRESHOLD=${FLYWHEEL_SURPRISE:-0}
 PAUSE="$HOME/wallzero/PAUSE"
 
 log() { echo "[flywheel] $(date -Is) $*"; }
@@ -33,6 +44,10 @@ metrics_lines() { wc -l <"$METRICS" 2>/dev/null | tr -d " " || echo 0; }
 new_positions() {
   tail -n +"$((base_lines + 1))" "$METRICS" 2>/dev/null |
     awk -F'"examples": ' 'NF>1 {split($2,a,","); s+=a[1]} END {printf "%d", s+0}'
+}
+new_surprise() { # integer sum (x1000) of surprise_sum since baseline
+  tail -n +"$((base_lines + 1))" "$METRICS" 2>/dev/null |
+    awk -F'"surprise_sum": ' 'NF>1 {split($2,a,","); s+=a[1]} END {printf "%d", s*1000}'
 }
 is_num() { case "$1" in "" | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
@@ -76,15 +91,27 @@ while true; do
     sleep 1680
     continue
   fi
+  [ "$(count_shards)" -lt "$MIN_SHARDS_TO_TRAIN" ] && continue
   fresh=$(new_positions)
   is_num "$fresh" || fresh=0
-  [ "$fresh" -lt "$POS_THRESHOLD" ] && continue
-
-  log "$fresh fresh positions; pausing generation"
+  if [ "$SURPRISE_THRESHOLD" -gt 0 ] 2>/dev/null; then
+    surprise=$(new_surprise)
+    is_num "$surprise" || surprise=0
+    if [ "$fresh" -lt $((POS_THRESHOLD / 2)) ]; then
+      continue # floor: never train on less than half a normal cycle
+    elif [ "$surprise" -lt "$SURPRISE_THRESHOLD" ] &&
+      [ "$fresh" -lt $((POS_THRESHOLD * 2)) ]; then
+      continue # not stale yet and under the ceiling; keep generating
+    fi
+    log "$fresh fresh positions, surprise ${surprise}m; pausing generation"
+  else
+    [ "$fresh" -lt "$POS_THRESHOLD" ] && continue
+    log "$fresh fresh positions; pausing generation"
+  fi
   echo "flywheel:$$" >"$PAUSE"
   while pgrep -f "node_chunk_kata[.]py" >/dev/null; do sleep 30; done
   log "training round starting"
-  setsid timeout --kill-after=60 3h env WALLZERO_OUTPUT="$OUT" WALLZERO_STEPS=3000 \
+  setsid timeout --kill-after=60 3h env WALLZERO_OUTPUT="$OUT" WALLZERO_FRESH_ROWS="$fresh" \
     .venv/bin/python scripts/node_round_kata.py >>"$HOME/wallzero/night.log" 2>&1 &
   round_pid=$!
   low=0
