@@ -222,3 +222,12 @@ unread KataGo material is Go-specific (rules/komi/scoring machinery) or
 already represented in the queue. The standing defense is the audit
 habit itself: any new WallZero mechanism gets checked against this doc
 and the reference before it ships.
+
+**Subtree-bias confirmation disposition (2026-07-29 afternoon):** the
+pre-declared 3x200 pooled confirmation was aborted after seed 1 for
+thermal reasons (user's Mac). Evidence on record: exploratory 100 games
+0.595 [0.50, 0.69]; confirmation seed 1211001, 200 games, **0.47
+[0.40, 0.54]** — the exploratory edge did not reproduce, the third such
+deflation caught by the pooling rule (LCB, distance-utility before it).
+Verdict: NOT confirmed; `subtree_bias_lambda` stays 0.0 everywhere.
+Re-run seeds 1211002-3 (Mac, overnight/idle) before any future enable.
