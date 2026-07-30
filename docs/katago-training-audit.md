@@ -223,6 +223,130 @@ already represented in the queue. The standing defense is the audit
 habit itself: any new WallZero mechanism gets checked against this doc
 and the reference before it ships.
 
+## Audit round 6 (2026-07-29 night): the training source itself
+
+Rounds 1-5 read KataGo's docs, configs and loop scripts. This pass read
+the training code from a local clone of the repository at HEAD
+(`python/train.py`, `python/katago/train/{metrics_pytorch,
+data_processing_pytorch,trainloop_helpers}.py`, `python/shuffle.py`,
+`cpp/dataio/trainingwrite.h`), which is where the remaining differences
+turned out to live.
+
+### Headline: our BatchNorm trunk is losing effective learning rate, and KataGo has an explicit mechanism to stop exactly that
+
+Every conv in our trunk is `bias=False` followed by `BatchNorm2d`
+(`network.py:72-88`), so a conv's weight *scale* is invisible to the
+forward pass — BN divides it back out. What is not invisible is the
+**relative** step size: for a scale-invariant weight, what changes the
+function is `Δw/‖w‖`, so as `‖w‖` grows the net effectively freezes,
+even with the nominal LR held constant.
+
+Measured across our own checkpoints (28.7M conv parameters, 99 conv
+tensors):
+
+| Checkpoint | conv L2 | conv RMS | vs r31 |
+|---|---|---|---|
+| r31 (era-3 base, `anchors/anchor-current.pt`) | 850.8 | 0.1587 | — |
+| r59 (era-2 final) | 1601.0 | 0.2986 | **+88%** |
+| era-3 current (r67) | 916.2 | 0.1709 | +8% in 5 rounds |
+
+The growth is not localised: **99 of 99 conv tensors grew**, median
+ratio **1.71×**, min 1.17×, max 2.00×. Under Adam the update magnitude
+is roughly scale-free, so relative step size falls about as `1/‖w‖` —
+era 2 ended taking relative steps ~40% smaller than it started, and
+falling. That is a mechanism which produces exactly what era 2 showed:
+losses drifting down while strength sits still for 28 rounds. Era 3 is
+reproducing the same trajectory from the same starting point.
+
+KataGo treats this as a first-class concern. For BN-family nets
+(`train.py:670-733`) weight decay is not a constant: it is scaled by
+`lr_scale^0.75`, by `sqrt(batch/256)`, and by an **adaptive factor that
+tracks the model's own norm against a recorded baseline**, spanning a
+16× range, with the stated purpose of holding the BN effective LR
+constant for the whole run. Their AdamW+BN constant is ~0.009 before
+those factors (~0.0127 at batch 512), against **our uniform 1e-4** —
+about two orders of magnitude weaker. At our LR, decoupled decay shrinks
+weights by ~3e-8 per step, which is nowhere near gradient-driven growth.
+
+Compounding it, our AdamW decays *everything*, including BN gammas and
+betas and all biases. KataGo routes those to `noreg` groups at ~1e-6,
+i.e. deliberately none (`model_pytorch.py`, `reg_dict["noreg"]`), and
+gives BN gammas a 0.25 factor and output heads 0.004.
+
+**This is a defect class, not a feature gap**, and it is the third one
+of the kind found in this campaign (60K window, sample reuse, now this).
+
+### Loss-function differences (all real, none previously recorded correctly)
+
+| Target | KataGo | WallZero |
+|---|---|---|
+| Value head | **Categorical** win/loss/noresult, cross-entropy, weight 1.20 × `value_loss_scale` 0.6 ≈ **0.72** | scalar `tanh` + MSE, weight **1.0** |
+| TD value | 4 extra value outputs on TD(λ) targets, λ = 1−1/(1+area·k) for k = 0.176/0.056/0.016 plus λ=0 (raw search value), each weight 1.20 × 0.6 | none |
+| Q values | per-move Q head trained on search child values, weighted by `sqrt(visits)`, weight **1.5** | none — child Q values are discarded after search |
+| Soft policy | policy target raised to the **0.25 power** and renormalised, trained as a separate output at weight **8.0** | none |
+| Opponent policy | predicts the opponent's next-move policy, weight 0.15 | none |
+| Policy (main) | cross-entropy, weight 1.0 | same ✓ |
+
+Round 2 recorded "value loss weight 0.6"; the true figure is 0.6 × 1.20
+= 0.72, and the head itself is categorical rather than scalar-MSE, which
+round 4 mis-recorded as matching (it matches *AlphaZero*, not KataGo).
+
+The TD and Q items are notable because the data they need is data we
+already compute and throw away: our search knows the root value and
+every child's Q at every move. Adding them is a replay-schema change
+(v3) plus extra heads, not new search work.
+
+### Optimizer and schedule
+
+- **Lookahead** (`train.py:1706-1719`, k=6, α=0.5) wraps their optimizer
+  and they raise the inner LR by 1/α to compensate. We have none.
+- **Head LR factor 0.5**: output heads train at half the trunk LR. Ours
+  are uniform.
+- **LR scaling with batch**: for AdamW they multiply by
+  `sqrt(batch·world/256)` explicitly, since Adam normalises gradient
+  scale. Their mature per-sample LR is 1.33 × 3e-5; at batch 512 with
+  lookahead that is ≈**1.1e-4** for the trunk and ≈5.6e-5 for heads,
+  against our flat **3e-4** — we run ~2.7× hot on the trunk and ~5× on
+  the heads. Not necessarily wrong (their nets are far larger and more
+  mature), but it is the first thing to trade against a weight-decay fix.
+- **Warmup** is a 9-step ladder from 1/20 up to 1/1 over the first 2M
+  samples of the *run*, not per round. Ours is a 5% ramp inside each
+  round, which is a different thing and probably fine at our size.
+- **SWA/EMA** is still absent on our side: they keep an `AveragedModel`
+  with EMA factor 1/8, updated every `samples_per_epoch/2` samples.
+  Queued since round 1, still the cheapest untried strength item.
+
+### Recorded for later: the window taper formula
+
+`shuffle.py:414-435` — a power law on `(usable_rows − min_rows +
+offset)^exponent`, normalised to unit initial derivative, scaled by
+`expand_window_per_row` and floored at `min_rows`. Era 3's all-data
+window is correct until we are well past 1M rows; this is the formula to
+adopt when we get there.
+
+### Verified aligned this pass
+
+Symmetry augmentation (they draw one of 8 per batch; we draw a mirror
+per sample — ours is finer-grained and Quoridor only has the mirror),
+loss reduction (they sum over the batch and rely on Adam's scale
+invariance; we average — equivalent under Adam), gradient clipping by
+global norm, policy-target masking for cheap searches, and row weighting
+by data weight.
+
+### Ranked plan out of this round
+
+1. **Weight-decay correctness** (defect): exclude norms/biases from
+   decay; raise conv decay toward the KataGo-equivalent; log conv norm
+   per round so the mechanism is visible. Cheapest and highest expected
+   value.
+2. **Value loss weight 1.0 → 0.72** — one constant, matches reference.
+3. **SWA/EMA of weights** across rounds.
+4. **TD value targets** (replay schema v3: store the search's root value
+   per position) — the largest variance reduction available to us.
+5. **Q-value head** on search child values; **soft policy** target;
+   **opponent policy** head — all schema+head work, rank after 4.
+6. Lookahead, head-LR factor, LR magnitude — tune only alongside 1.
+
 **Subtree-bias confirmation disposition (2026-07-29 afternoon):** the
 pre-declared 3x200 pooled confirmation was aborted after seed 1 for
 thermal reasons (user's Mac). Evidence on record: exploratory 100 games
