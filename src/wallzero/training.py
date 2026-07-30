@@ -26,7 +26,16 @@ class TrainConfig:
     batch_size: int = 512
     learning_rate: float = 2e-3
     minimum_learning_rate: float = 2e-5
-    weight_decay: float = 1e-4
+    # Decay constants follow KataGo's AdamW+BatchNorm branch (train.py
+    # get_weight_decay): trunk weights 0.009, head weights 0.004, BatchNorm
+    # gammas at a 0.25 factor, and biases/betas effectively exempt. All are
+    # quoted per batch-256 and rescaled by sqrt(batch/256) below. The old
+    # uniform 1e-4 was ~60x weaker than the norm drift it had to cancel, so
+    # trunk weight norm grew 88% across era 2 (see docs/katago-training-audit).
+    weight_decay: float = 9e-3
+    head_weight_decay: float = 4e-3
+    gamma_weight_decay_scale: float = 0.25
+    noreg_weight_decay: float = 1e-6
     gradient_clip: float = 5.0
     warmup_fraction: float = 0.05
     mirror_probability: float = 0.5
@@ -48,6 +57,10 @@ class TrainMetrics:
     total_loss: float
     policy_entropy: float
     elapsed_seconds: float
+    # Trunk weight norm before/after the round. On a BatchNorm net this is the
+    # early-warning signal for effective-LR decay: it should hover, not climb.
+    weight_norm_start: float = 0.0
+    weight_norm_end: float = 0.0
 
 
 def _learning_rate_multiplier(step: int, config: TrainConfig) -> float:
@@ -58,6 +71,53 @@ def _learning_rate_multiplier(step: int, config: TrainConfig) -> float:
     minimum_ratio = config.minimum_learning_rate / config.learning_rate
     cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
     return minimum_ratio + (1.0 - minimum_ratio) * cosine
+
+
+_HEAD_PREFIXES = ("policy_head", "value_features", "value_output", "distance_output")
+
+
+def _weight_decay_groups(
+    model: PolicyValueNet, config: TrainConfig
+) -> list[dict[str, object]]:
+    """Split parameters into KataGo's decay groups.
+
+    Weight decay is what holds a BatchNorm trunk's effective learning rate
+    steady: a conv's scale is invisible through BN, so unopposed norm growth
+    silently shrinks the relative step size. Biases and BN betas have no such
+    invariance to maintain and are exempt; gammas are decayed lightly.
+    """
+    batch_scale = math.sqrt(config.batch_size / 256.0)
+    decays = {
+        "trunk": config.weight_decay,
+        "head": config.head_weight_decay,
+        "gamma": config.weight_decay * config.gamma_weight_decay_scale,
+        "noreg": config.noreg_weight_decay,
+    }
+    members: dict[str, list[nn.Parameter]] = {key: [] for key in decays}
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            continue
+        if parameter.dim() >= 2:
+            key = "head" if name.startswith(_HEAD_PREFIXES) else "trunk"
+        elif name.endswith("weight"):
+            key = "gamma"
+        else:
+            key = "noreg"
+        members[key].append(parameter)
+    return [
+        {"params": parameters, "weight_decay": decays[key] * batch_scale}
+        for key, parameters in members.items()
+        if parameters
+    ]
+
+
+def _trunk_weight_norm(model: PolicyValueNet) -> float:
+    """L2 norm over conv/linear weights — the quantity that must not drift."""
+    total = 0.0
+    for parameter in model.parameters():
+        if parameter.dim() >= 2:
+            total += float((parameter.detach().float() ** 2).sum())
+    return math.sqrt(total)
 
 
 def train_candidate(
@@ -80,9 +140,8 @@ def train_candidate(
     model.to(device)
     model.train()
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        _weight_decay_groups(model, config),
         lr=config.learning_rate,
-        weight_decay=config.weight_decay,
     )
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
@@ -104,6 +163,7 @@ def train_candidate(
     total_loss_total = 0.0
     entropy_total = 0.0
     started = time.monotonic()
+    weight_norm_start = _trunk_weight_norm(model)
 
     frequency = np.array([example.weight for example in examples], dtype=np.float64)
     uniform_weights = bool(np.all(frequency == frequency[0]))
@@ -229,6 +289,8 @@ def train_candidate(
             total_loss=total_loss_total / denominator,
             policy_entropy=entropy_total / denominator,
             elapsed_seconds=elapsed,
+            weight_norm_start=weight_norm_start,
+            weight_norm_end=_trunk_weight_norm(model),
         ),
         optimizer,
     )

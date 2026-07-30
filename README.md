@@ -195,6 +195,38 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-29 night, weight decay and the BN trunk)
+
+Audit round 6 read KataGo's training source directly (see
+`docs/katago-training-audit.md`) and found a mechanism, not just a
+feature gap. Our trunk is `conv(bias=False) → BatchNorm` throughout, so a
+conv's weight *scale* is invisible to the forward pass; what matters is
+the relative step `Δw/‖w‖`. Measured on our own checkpoints, era 2 grew
+conv weight L2 by **88%** from r31 to r59 — **99 of 99 conv tensors
+grew**, median 1.71× — so the net was quietly taking ever-smaller
+relative steps while its losses kept falling. Era 3 is repeating it
+(+8% in five rounds).
+
+KataGo scales weight decay by `lr^0.75`, by `sqrt(batch/256)`, and by an
+adaptive factor tracking model norm against a baseline, precisely to hold
+BN effective LR constant; their AdamW+BN constant is ~100× ours, and
+they exempt biases and norm betas that we were decaying.
+
+Shipped at round 69: KataGo's decay groups
+(`training.py:_weight_decay_groups`) — trunk weights 0.009, head weights
+0.004, BN gammas at a 0.25 factor, biases/betas exempt at 1e-6, all
+scaled by `sqrt(batch/256)`. `TrainMetrics` now records
+`weight_norm_start`/`weight_norm_end` every round, so the norm
+trajectory lands in the round logs and the mechanism stays visible.
+
+Honest caveat on magnitude: at our LR the reference constant cancels
+roughly half of era 2's measured per-step drift, and less of era 3's
+(short rounds re-initialise AdamW each time, and those transients are
+themselves a norm-inflation source KataGo does not have — they run one
+continuous optimizer). The per-round norm log is the instrument: if it
+keeps climbing, the escalations are optimizer-state continuity across
+rounds and a larger decay constant.
+
 ## Recorded status (2026-07-29 evening, the shard-load stall)
 
 Era 3 lost ~10 hours to a latent bug that only the all-data window could
