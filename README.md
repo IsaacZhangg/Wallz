@@ -195,6 +195,36 @@ Training progress is judged in layers:
 Self-play can run for a very long time. The pipeline is intentionally resumable;
 ending a compute session does not turn an early checkpoint into an expert one.
 
+## Recorded status (2026-07-29 evening, the shard-load stall)
+
+Era 3 lost ~10 hours to a latent bug that only the all-data window could
+expose. `load_shard` held an open `NpzFile` and indexed it *inside* its
+per-row loop, so each of ~12 columns was decompressed out of the zip
+again for every row: **18.4 s per 5K-row shard**. At 45 shards (r67) a
+round still finished; at 71 the window load reached **21.7 min** and
+crossed the flywheel's 15-min power watchdog, which killed the round
+before it ever touched the GPU. Twenty-two consecutive rounds died that
+way (08:54 → 18:32, all status 137), and because each attempt paused
+generation for ~17 of every ~29 minutes, the node was also generating at
+roughly 40% duty the whole time.
+
+Two fixes, both shipped and deployed:
+
+- **`load_shard` reads each column once**, before the loop. Verified
+  bit-identical to the old implementation on a real production shard
+  (5,036 examples: states, policies, values, weights and distances all
+  equal, dtypes and Python types preserved). Full 71-shard window load on
+  the node: **21.7 min → 2.3 s** for 355,133 examples.
+- **The flywheel's power watchdog now arms** on the first ≥110W sample or
+  after `FLYWHEEL_LOAD_GRACE` minutes (default 30), whichever comes
+  first. A round is no longer punished for its CPU-side load phase, while
+  a genuine wedge is still caught within 15 min of the GPU going quiet.
+
+Lesson recorded: the watchdogs assume "training round running" implies
+"GPU busy". Any pre-GPU phase that grows with the replay window can
+recreate this, so growth-sensitive phases need their own grace, not the
+steady-state rule.
+
 ## Recorded status (2026-07-28, era 3: the window fix and the restart)
 
 The data-volume test closed falsified — and the post-mortem found the
@@ -254,7 +284,9 @@ to `~/wallzero/` and `/etc/systemd/system/` on the node):
   now survive reboots meaningfully.
 - **Flywheel power watchdog**: a wedged training round (same <110W/15-min
   rule) is killed instead of burning its full 3h timeout with generation
-  paused.
+  paused. (Since 2026-07-29 the rule only arms once the round has reached
+  the GPU, or after `FLYWHEEL_LOAD_GRACE` minutes — see the shard-load
+  stall above.)
 - **Boot recovery** (`wallzero-prep/gen/flywheel.service`): on every boot,
   prep waits for GPU+X, runs the bitwise canary at stock clocks
   (re-recording the reference there if best.pt changed — stock is always

@@ -90,39 +90,57 @@ def load_shard(path: str | Path) -> list[TrainingExample]:
         if schema not in ("wallzero.replay.v1", "wallzero.replay.v2"):
             raise ValueError(f"unsupported replay schema in {source}")
         second = schema == "wallzero.replay.v2"
-        examples = []
-        for index in range(len(data["values"])):
-            pawn_row = data["pawns"][index]
-            remaining_row = data["remaining"][index]
-            state = State(
-                pawns=(int(pawn_row[0]), int(pawn_row[1])),
-                walls_remaining=(int(remaining_row[0]), int(remaining_row[1])),
-                horizontal=int(data["horizontal"][index]),
-                vertical=int(data["vertical"][index]),
-                to_play=int(data["to_play"][index]),
-                ply=int(data["ply"][index]),
+        # Every `data[key]` decompresses that entire array out of the zip
+        # again, so each column is read exactly once, up front. Indexing the
+        # NpzFile inside the loop cost ~18s per 5K-row shard instead of ~0.1s,
+        # which pushed a 71-shard window load past the flywheel's watchdog.
+        pawns = data["pawns"].tolist()
+        remaining = data["remaining"].tolist()
+        horizontal = data["horizontal"].tolist()
+        vertical = data["vertical"].tolist()
+        to_play = data["to_play"].tolist()
+        ply = data["ply"].tolist()
+        values = data["values"].tolist()
+        policies = data["policies"].astype(np.float32)
+        if second:
+            policy_weights = data["policy_weights"].tolist()
+            weights = data["weights"].tolist()
+            own_distances = data["own_distances"].tolist()
+            opp_distances = data["opp_distances"].tolist()
+
+    examples = []
+    for index in range(len(values)):
+        pawn_row = pawns[index]
+        remaining_row = remaining[index]
+        state = State(
+            pawns=(pawn_row[0], pawn_row[1]),
+            walls_remaining=(remaining_row[0], remaining_row[1]),
+            horizontal=horizontal[index],
+            vertical=vertical[index],
+            to_play=to_play[index],
+            ply=ply[index],
+        )
+        if second:
+            policy_weight = policy_weights[index]
+            weight = weights[index]
+            own_distance = own_distances[index]
+            opp_distance = opp_distances[index]
+        else:
+            policy_weight = 1.0
+            weight = 1.0
+            own_distance = state.shortest_distance(state.to_play)
+            opp_distance = state.shortest_distance(1 - state.to_play)
+        examples.append(
+            TrainingExample(
+                state=state,
+                policy=policies[index],
+                value=float(values[index]),
+                policy_weight=policy_weight,
+                weight=weight,
+                own_distance=own_distance,
+                opp_distance=opp_distance,
             )
-            if second:
-                policy_weight = float(data["policy_weights"][index])
-                weight = float(data["weights"][index])
-                own_distance = int(data["own_distances"][index])
-                opp_distance = int(data["opp_distances"][index])
-            else:
-                policy_weight = 1.0
-                weight = 1.0
-                own_distance = state.shortest_distance(state.to_play)
-                opp_distance = state.shortest_distance(1 - state.to_play)
-            examples.append(
-                TrainingExample(
-                    state=state,
-                    policy=data["policies"][index].astype(np.float32),
-                    value=float(data["values"][index]),
-                    policy_weight=policy_weight,
-                    weight=weight,
-                    own_distance=own_distance,
-                    opp_distance=opp_distance,
-                )
-            )
+        )
     return examples
 
 

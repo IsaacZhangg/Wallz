@@ -36,6 +36,9 @@ MIN_SHARDS_TO_TRAIN=${FLYWHEEL_MIN_SHARDS:-20}
 # Leave unset/0 for the plain position trigger until calibrated from
 # chunk-metrics surprise history.
 SURPRISE_THRESHOLD=${FLYWHEEL_SURPRISE:-0}
+# Minutes a round may spend below the power watchdog's threshold before it
+# has ever reached the GPU (replay window load; see the watchdog below).
+LOAD_GRACE=${FLYWHEEL_LOAD_GRACE:-30}
 PAUSE="$HOME/wallzero/PAUSE"
 
 log() { echo "[flywheel] $(date -Is) $*"; }
@@ -115,10 +118,20 @@ while true; do
     .venv/bin/python scripts/node_round_kata.py >>"$HOME/wallzero/night.log" 2>&1 &
   round_pid=$!
   low=0
+  armed=0
+  minutes=0
   while kill -0 "$round_pid" 2>/dev/null; do
     sleep 60
+    minutes=$((minutes + 1))
     watts=$(nvidia-smi --query-gpu=power.draw --format=csv,noheader,nounits 2>/dev/null | head -1 | cut -d. -f1)
     is_num "$watts" || watts=0 # failed read = unhealthy
+    # A round loads its replay window on the CPU before it ever touches the
+    # GPU, so the 110W rule cannot apply yet: on 2026-07-29 that phase grew
+    # past 15 min and the watchdog killed 21 healthy rounds in a row. Arm on
+    # the first busy sample (normal case) or after LOAD_GRACE minutes, so a
+    # true wedge is still caught within 15 min of the GPU going quiet.
+    [ "$watts" -ge 110 ] && armed=1
+    if [ "$armed" -eq 0 ] && [ "$minutes" -lt "$LOAD_GRACE" ]; then continue; fi
     if [ "$watts" -lt 110 ]; then low=$((low + 1)); else low=0; fi
     if [ "$low" -ge 15 ]; then
       log "power watchdog: ${watts}W for 15 min; killing wedged round group"
