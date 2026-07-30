@@ -168,7 +168,10 @@ def train_candidate(
     frequency = np.array([example.weight for example in examples], dtype=np.float64)
     uniform_weights = bool(np.all(frequency == frequency[0]))
     sampling_weights = None if uniform_weights else frequency / frequency.sum()
-    distance_head = getattr(model, "distance_output", None) is not None
+    # Ask the config, not the module tree: the fixed-scale architecture keeps
+    # its distance head inside each HeadSet, so probing for a top-level
+    # attribute silently disabled the auxiliary target there.
+    distance_head = model.config.distance_head
 
     def _assemble_batch() -> tuple[
         FloatBatch, FloatBatch, FloatBatch, FloatBatch, FloatBatch
@@ -238,24 +241,29 @@ def train_candidate(
             else nullcontext()
         )
         with context:
-            policy_logits, predicted_value, predicted_distance = model.forward_train(
-                inputs
-            )
-            log_policy = torch.log_softmax(policy_logits, dim=1)
-            per_sample_policy = -(target_policy * log_policy).sum(dim=1)
-            mask_total = policy_mask.sum().clamp(min=1.0)
-            policy_loss = (per_sample_policy * policy_mask).sum() / mask_total
-            value_loss = nn.functional.mse_loss(predicted_value, target_value)
-            loss = policy_loss + value_loss
-            if distance_head and predicted_distance is not None:
-                valid = (target_distance >= 0.0).all(dim=1).float()
-                distance_error = (
-                    (predicted_distance - target_distance / 20.0) ** 2
-                ).mean(dim=1)
-                distance_loss = (distance_error * valid).sum() / valid.sum().clamp(
-                    min=1.0
-                )
-                loss = loss + 0.1 * distance_loss
+            # One entry per head set that takes loss. A fixed-scale net trains
+            # a BatchNorm path and a BatchNorm-free path; the latter is always
+            # last and is the one that runs at inference, so its losses are
+            # the ones worth reporting across architectures.
+            heads = model.forward_train_heads(inputs)
+            loss = torch.zeros((), device=inputs.device)
+            for weight, policy_logits, predicted_value, predicted_distance in heads:
+                log_policy = torch.log_softmax(policy_logits, dim=1)
+                per_sample_policy = -(target_policy * log_policy).sum(dim=1)
+                mask_total = policy_mask.sum().clamp(min=1.0)
+                policy_loss = (per_sample_policy * policy_mask).sum() / mask_total
+                value_loss = nn.functional.mse_loss(predicted_value, target_value)
+                head_loss = policy_loss + value_loss
+                if distance_head and predicted_distance is not None:
+                    valid = (target_distance >= 0.0).all(dim=1).float()
+                    distance_error = (
+                        (predicted_distance - target_distance / 20.0) ** 2
+                    ).mean(dim=1)
+                    distance_loss = (distance_error * valid).sum() / valid.sum().clamp(
+                        min=1.0
+                    )
+                    head_loss = head_loss + 0.1 * distance_loss
+                loss = loss + weight * head_loss
 
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
@@ -264,6 +272,8 @@ def train_candidate(
         scaler.update()
         scheduler.step()
 
+        # policy_logits/policy_loss/value_loss are the last loop iteration's,
+        # i.e. the inference head's — the comparable numbers to log.
         with torch.no_grad():
             probabilities = torch.softmax(policy_logits.float(), dim=1)
             entropy = (
