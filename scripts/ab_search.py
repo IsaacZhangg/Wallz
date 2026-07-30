@@ -50,6 +50,11 @@ def main() -> None:
     parser.add_argument("--distance-scale", type=float, default=6.0)
     parser.add_argument("--subtree-bias", type=float, default=0.0)
     parser.add_argument("--subtree-alpha", type=float, default=0.8)
+    # Exploration constants: inherited from AlphaZero and never tuned for
+    # Quoridor's branching factor. Both sides share the network, so a sweep
+    # here is a pure search measurement.
+    parser.add_argument("--pb-c-init", type=float, default=None)
+    parser.add_argument("--fpu", type=float, default=None)
     args = parser.parse_args()
 
     device = select_device(args.device)
@@ -68,6 +73,8 @@ def main() -> None:
         distance_utility_scale=args.distance_scale,
         subtree_bias_lambda=args.subtree_bias,
         subtree_bias_alpha=args.subtree_alpha,
+        pb_c_init=args.pb_c_init if args.pb_c_init is not None else baseline.pb_c_init,
+        fpu_reduction=args.fpu if args.fpu is not None else baseline.fpu_reduction,
     )
 
     started = time.monotonic()
@@ -95,6 +102,8 @@ def main() -> None:
                     "lcb_selection": args.lcb,
                     "distance_utility_weight": args.distance_weight,
                     "subtree_bias_lambda": args.subtree_bias,
+                    "pb_c_init": variant.pb_c_init,
+                    "fpu_reduction": variant.fpu_reduction,
                 },
                 "games": result.games,
                 "variant_wins": result.candidate_wins,

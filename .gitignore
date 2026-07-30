@@ -9,6 +9,12 @@ __pycache__/
 artifacts/checkpoints/
 artifacts/colab/
 artifacts/replay/
+# Shard copies pulled for offline measurement, and the Mac generator's
+# working mirror. The measurements themselves (artifacts/ab) are evidence
+# and stay tracked.
+artifacts/eval-shards/
+artifacts/holdout/
+artifacts/mac-gen/
 dist/
 
 # Campaign artifacts: commit the evidence record (manifests, evaluation

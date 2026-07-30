@@ -39,6 +39,11 @@ SURPRISE_THRESHOLD=${FLYWHEEL_SURPRISE:-0}
 # Minutes a round may spend below the power watchdog's threshold before it
 # has ever reached the GPU (replay window load; see the watchdog below).
 LOAD_GRACE=${FLYWHEEL_LOAD_GRACE:-30}
+# Era 4 (b10c128, from scratch) starts far below the r31 anchor, so the
+# anchor ladder would suspend training on its first check. The match still
+# runs and still records to strength-timeline.jsonl — only the automatic
+# suspension is held off. RESTORE THIS TO 0.40 once era 4 clears 0.40.
+export WALLZERO_ANCHOR_ALARM_AT="${WALLZERO_ANCHOR_ALARM_AT:-0.0}"
 PAUSE="$HOME/wallzero/PAUSE"
 
 log() { echo "[flywheel] $(date -Is) $*"; }

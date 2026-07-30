@@ -27,7 +27,11 @@ GAMES = 100
 SIMULATIONS = 192
 SEED = 1_200_001
 PROMOTE_AT = 0.60
-ALARM_AT = 0.40
+# A brand-new lineage loses badly to a mature anchor for its first rounds, so
+# the alarm threshold is settable: the match still runs and still records the
+# trajectory, only the automatic training suspension is held off. Set it back
+# to 0.40 once the new lineage clears that bar.
+ALARM_AT = float(os.environ.get("WALLZERO_ANCHOR_ALARM_AT", "0.40"))
 
 
 def wilson(successes: float, trials: int, z: float = 1.959964) -> tuple[float, float]:
