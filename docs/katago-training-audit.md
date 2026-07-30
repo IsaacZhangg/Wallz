@@ -347,6 +347,106 @@ by data weight.
    **opponent policy** head — all schema+head work, rank after 4.
 6. Lookahead, head-LR factor, LR magnitude — tune only alongside 1.
 
+## Audit round 7 (2026-07-29 night): efficiency — net size, architecture, and what their run actually did
+
+Round 6 asked whether our training loop matches theirs. Round 7 asks the
+efficiency question: for our compute, are we even training the right net?
+Sources: `TrainingHistory.md`, `python/katago/train/modelconfigs.py`,
+`docs/KataGoMethods.md` sections not previously read, `SelfplayTraining.md`.
+
+### The headline: we are running a net ~7-17× too large for our hardware
+
+KataGo's g170 run (28-46 V100s) did **not** start at its final net size.
+From `TrainingHistory.md`, with days of self-play and the Elo each net
+reached at the end of its phase:
+
+| Net | Their phase | Elo at end of phase |
+|---|---|---|
+| b6c96 | first **0.75 days** | −1184 |
+| b10c128 | to day **1.75** | −280 |
+| b15c192 | to day **7.5** | 512 |
+| b20c256 | days 15.5-38.5 | 959 → 1293 |
+| b30c320 / b40c256 | from day 47 | 1412+ |
+
+WallZero has been running a b24c256-class net (29.5M params) on **one
+GTX 1080** since round 23. Measured eval throughput (M4 Pro / MPS, batch
+64, our own `PolicyValueNet` at each size):
+
+| Net | Params | evals/s | vs ours |
+|---|---|---|---|
+| b6c96 | 1.74M | 13,495 | **17.0×** |
+| b10c128 | 3.73M | 5,670 | **7.1×** |
+| b15c192 | 10.85M | 2,031 | 2.6× |
+| b20c256 | 24.70M | 954 | 1.2× |
+| **b24c256 (ours)** | 29.49M | 796 | 1.0× |
+
+Self-play on the 1080 is roofline-bound (~7 pos/s ≈ the card's fp32
+peak), so data rate scales with FLOPs: **a b10c128 would generate roughly
+7× the positions per day**, and train rounds ~7× faster on top. Data
+volume is the constraint we already identified as binding; we are paying
+7× for capacity that 355K total positions cannot begin to fill. By data
+volume we are at the b6c96/b10c128 stage of their run while running
+their day-15 net.
+
+Scale honestly, though: their b10c128 phase *ended* at 67M data rows. At
+our current ~0.5M/day we would need months; at 7× we would need weeks.
+Quoridor is a far smaller game than Go so the absolute requirement is
+surely much lower — but the ordering of magnitude is the point, and it
+says small net now, grow later, which is exactly their schedule. We
+already have warm-start arch growth implemented for the growth step.
+
+### They abandoned BatchNorm — and their reason is round 6's finding from the other side
+
+`KataGoMethods.md` "Fixed Variance Initialization and One Batch Norm"
+(shipped March 2023): every place a BN *would* go gets a fixed
+layer-specific scalar K, chosen so the idealised output variance returns
+to 1; then exactly **one** BN sits at the end of the trunk, with a
+duplicate set of heads that skips it. The BN-path heads carry 80% of the
+loss weight and drive optimisation; the BN-free heads carry 20% and are
+what runs at inference, so there is no train/inference discrepancy and no
+running statistics to track.
+
+Their stated reason for wanting a BN in the loss path at all is that it
+"removes most of the incentive throughout the rest of the net for weights
+to adjust their overall magnitudes" — the precise phenomenon round 6
+measured in our net (+88% conv norm across era 2). Our all-BN trunk gets
+the magnitude-invariance *without* the constraint, which is the worst of
+both. Note also that even their smallest net, b6c96, uses `norm_kind:
+fixup` and puts **2 of its 6 blocks** in global-pooling form.
+
+### Nested bottleneck blocks
+
+1×1 down-projection, **four** 3×3 convs at reduced width paired into
+inner residual blocks, 1×1 back up. Plain bottlenecks tested *worse* for
+them; the gain only appears once enough 3×3 convs amortise the 1×1 cost.
+Result: their b18c384nbt runs at b40c256 speed and nearly b60c320
+strength. This is a strength-per-FLOP win, and the natural block to adopt
+if we rebuild the net anyway.
+
+### Short-term value targets, sized for Quoridor
+
+Their three auxiliary value targets are exponential averages of future
+MCTS values, `(1−λ)Σ λ^(t'−t) MCTS_value(t')`, with mean horizons ~6, 16
+and 50 turns on 19×19 and scaled down in proportion to board area. Our
+games run ~52 plies against their ~250, so the analogous horizons are
+roughly **1.2, 3.4 and 10.5 plies → λ ≈ 0.545, 0.773, 0.913**. They note
+the value-accuracy gain is modest but free, and that the real payoff is
+that short-term predictions unlock uncertainty-weighted playouts and
+optimistic policy.
+
+### Efficiency items still unbuilt from earlier rounds
+
+`reduceVisits` on decided games (round 3), the game-diversity cluster
+(`initGamesWithPolicy`, fork games, side positions — round 3), SWA
+(round 1). All remain open and all are compute-savers or
+data-quality-per-compute wins.
+
+### Conclusion
+
+Rounds 1-6 progressively aligned the recipe. Round 7 says the recipe is
+no longer the main lever: **net size is**. The sequenced plan lives in
+`docs/katago-adoption-plan.md`.
+
 **Subtree-bias confirmation disposition (2026-07-29 afternoon):** the
 pre-declared 3x200 pooled confirmation was aborted after seed 1 for
 thermal reasons (user's Mac). Evidence on record: exploratory 100 games
