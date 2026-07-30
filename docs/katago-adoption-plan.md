@@ -29,6 +29,15 @@ change**, measured against the current lineage on the standing KPIs.
 
 ## Phase 1 — the net (one bundled change, highest leverage)
 
+**Status: built and tested (commit 8ba3581), not yet cut over.** The
+architecture exists behind `norm_kind="fixscaleonenorm"` with
+`gpool_blocks=(5, 8)`; `norm_kind` defaults to `"bnorm"` so the deployed
+b24c256 lineage is untouched. Measured b10c128 fixscale+gpool+dual-heads
+against the production net: **7.26× eval throughput on MPS, 6.23× on the
+GTX 1080** (both nets benchmarked back to back under identical load).
+What remains is the cutover decision: starting this lineage ends era 3.
+
+
 1. **Shrink to b10c128 or b15c192.** b10c128 measures 7.1× our current
    eval throughput, b15c192 2.6×. b10c128 matches where we actually are
    by data volume; b15c192 is the conservative option that still nearly
