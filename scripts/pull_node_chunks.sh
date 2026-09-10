@@ -3,8 +3,8 @@
 # Only completed chunks exist on disk (each is fsynced on completion), so this
 # is safe to run at any time, including while the node keeps generating.
 set -euo pipefail
-NODE="${1:-isaac-pc}"
-REMOTE="${2:-/home/tzhang/wallzero/output/wallzero-output}"
+NODE="${1:-${WALLZERO_NODE:?set WALLZERO_NODE or pass a node as the first argument}}"
+REMOTE="${2:-${WALLZERO_REMOTE_DIR:-wallzero/output/wallzero-output}}"
 LOCAL="${3:-artifacts/runs/a100-campaign-local/wallzero-output}"
 
 mkdir -p "$LOCAL/replay"

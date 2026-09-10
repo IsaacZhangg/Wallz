@@ -8,15 +8,15 @@ After=wallzero-prep.service
 Wants=wallzero-prep.service
 
 [Service]
-User=tzhang
-Environment=HOME=/home/tzhang
-WorkingDirectory=/home/tzhang/wallzero
-ExecStart=/home/tzhang/wallzero/.venv/bin/python /home/tzhang/wallzero/gpu_keepalive.py
+User=@NODE_USER@
+Environment=HOME=@NODE_HOME@
+WorkingDirectory=@NODE_HOME@/wallzero
+ExecStart=@NODE_HOME@/wallzero/.venv/bin/python @NODE_HOME@/wallzero/gpu_keepalive.py
 Restart=always
 RestartSec=30
 Nice=10
-StandardOutput=append:/home/tzhang/wallzero/keepalive.log
-StandardError=append:/home/tzhang/wallzero/keepalive.log
+StandardOutput=append:@NODE_HOME@/wallzero/keepalive.log
+StandardError=append:@NODE_HOME@/wallzero/keepalive.log
 
 [Install]
 WantedBy=multi-user.target

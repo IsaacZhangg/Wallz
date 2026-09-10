@@ -12,13 +12,13 @@ After=lightdm.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-User=tzhang
-Environment=HOME=/home/tzhang
-WorkingDirectory=/home/tzhang/wallzero
-ExecStart=/bin/bash /home/tzhang/wallzero/boot_prep.sh
+User=@NODE_USER@
+Environment=HOME=@NODE_HOME@
+WorkingDirectory=@NODE_HOME@/wallzero
+ExecStart=/bin/bash @NODE_HOME@/wallzero/boot_prep.sh
 TimeoutStartSec=900
-StandardOutput=append:/home/tzhang/wallzero/prep.log
-StandardError=append:/home/tzhang/wallzero/prep.log
+StandardOutput=append:@NODE_HOME@/wallzero/prep.log
+StandardError=append:@NODE_HOME@/wallzero/prep.log
 
 [Install]
 WantedBy=multi-user.target

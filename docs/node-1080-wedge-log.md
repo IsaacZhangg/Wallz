@@ -1,4 +1,4 @@
-# isaac-pc GTX 1080 wedge incident log
+# GTX 1080 training-node incident log
 
 Signature of a wedge (all incidents so far): `nvidia-smi` reports 100% GPU
 utilization but power draw sits at ~60-63W (healthy self-play or training on
@@ -38,7 +38,7 @@ action.
 The watchdog fired correctly at 23:24 (first live test) but the restarted
 chunk wedged again immediately, and so did the next attempt after a full
 reboot with `pcie_aspm=off` active — eliminating accumulated driver state as
-the cause. Incident 4 also wedged at 88W, *above* the original 80W watchdog
+the cause. Incident 4 also wedged at 88W, _above_ the original 80W watchdog
 threshold (post-boot persistence mode raises idle draw), so the threshold is
 now 110W.
 

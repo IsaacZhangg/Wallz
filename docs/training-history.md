@@ -10,7 +10,7 @@ the original notes are relative to the repository root.
 ## Later campaign decision, July 29, 2026
 
 The subsequent
-[era-4 commit](https://github.com/IsaacZhangg/Wallz/commit/abefcb1d0dc935712f75d66fda27139b523af69a)
+[era-4 commit](https://github.com/IsaacZhangg/Wallz/commit/ee5adc4fa9c7aaf369273845b2f10553b79fa00c)
 records a restart from round 31 and an additional training pass to account for inherited
 replay data. That pass improved held-out policy and value fit, but its 0.515 score
 against round 31 did not establish a strength gain. The commit also records abandoning
@@ -221,10 +221,9 @@ this board). Constraints on driver rollback: 580 is officially the LAST Pascal b
 (support to Aug 2028), apt carries ONLY 580.173.02 for noble, and the node runs kernel
 7.0 that older point releases (580.142/570.x) predate — a failed DKMS build would take
 down X and with it the OC entirely. Decision: accept-and-manage through the data-volume
-milestone; an `nvidia-bug-report.log.gz` captured DURING a live latch is saved at
-`artifacts/nvidia-bug-report-latched-580.173.02.log.gz` for an upstream report to the
-580-legacy feedback thread (real path to a fix — the branch takes critical fixes until
-2028).
+milestone. A diagnostic report captured during a live latch was retained privately
+for the 580-legacy feedback thread. The raw dump is excluded from the public source
+tree because it contains machine and network identifiers.
 
 ## Recorded status (2026-07-26, node efficiency pass)
 

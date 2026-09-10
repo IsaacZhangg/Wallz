@@ -1,5 +1,5 @@
 #!/bin/bash
-# WallZero auto-flywheel for the isaac-pc node: whenever ~FLYWHEEL_POSITIONS
+# WallZero auto-flywheel for the training node: whenever ~FLYWHEEL_POSITIONS
 # fresh positions have been generated (summed from chunk-metrics.jsonl), it
 # pauses the generation loop, trains one gateless round, adopts the result,
 # and resumes generation.

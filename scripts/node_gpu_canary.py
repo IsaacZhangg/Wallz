@@ -9,27 +9,27 @@ error and the offset must come down.
 Exit codes: 0 pass, 2 mismatch.
 """
 
+import hashlib
 import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
 
 from wallzero.network import TorchEvaluator, load_checkpoint
 
-REF = "/home/tzhang/wallzero/gpu-canary-reference.npz"
-
-import hashlib
+REF = Path.home() / "wallzero/gpu-canary-reference.npz"
 
 BEST = "output/wallzero-output/best.pt"
-best_hash = hashlib.sha256(open(BEST, "rb").read()).hexdigest()
+best_hash = hashlib.sha256(Path(BEST).read_bytes()).hexdigest()
 
 model, _ = load_checkpoint("output/wallzero-output/best.pt", device="cuda")
 evaluator = TorchEvaluator(model, torch.device("cuda"))
 rng = np.random.default_rng(99)
-batch = rng.random((512, 13, 9, 9), dtype=np.float32)
+batch = rng.random((512, 13, 9, 9), dtype="float32")
 
 for _ in range(3):  # profiling-executor warmup: steady-state kernels only
     evaluator.evaluate_planes(batch)
@@ -69,7 +69,7 @@ sizes = (64, 256, 512, 1024)
 deadline = time.monotonic() + 60
 iterations = 0
 while time.monotonic() < deadline:
-    stress = rng.random((sizes[iterations % 4], 13, 9, 9), dtype=np.float32)
+    stress = rng.random((sizes[iterations % 4], 13, 9, 9), dtype="float32")
     evaluator.evaluate_planes(stress)
     iterations += 1
     if iterations % 25 == 0:

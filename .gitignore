@@ -1,5 +1,18 @@
 .DS_Store
 .firecrawl/
+.claude/worktrees/
+.claude/settings.local.json
+
+# Local credentials and deployment copies. Keep shareable examples tracked.
+.env
+.env.*
+!.env.example
+/scripts/systemd/*.service
+
+# Runtime logs and diagnostic dumps can include machine and network identifiers.
+/artifacts/*.log
+/artifacts/*.log.*
+
 .pytest_cache/
 .ruff_cache/
 .ty/

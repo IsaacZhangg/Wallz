@@ -1,5 +1,5 @@
 #!/bin/bash
-# WallZero off-site backup for the isaac-pc node -> Google Drive (rclone
+# WallZero off-site backup for the training node -> Google Drive (rclone
 # remote "gdrive", scope drive.file). Bounded on both ends by design:
 #
 #   Drive: all replay shards (~10MB/day), campaign state + logs (KB),

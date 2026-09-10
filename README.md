@@ -147,9 +147,26 @@ not restore an in-progress search or optimizer step. Use a new output directory 
 separate experiment.
 
 For a Colab GPU runtime, [scripts/colab_train.py](scripts/colab_train.py) wraps the same
-loop and reports accelerator details. The scripts under `scripts/node_*` and
-`scripts/systemd/` support the dedicated training node and contain deployment paths and
-hardware settings. Review those before adapting them to another machine.
+loop and reports accelerator details. The scripts under `scripts/node_*` and the
+[systemd templates](scripts/systemd/README.md) support a dedicated training node.
+The templates require local account settings, and the scripts retain hardware settings
+from the recorded GTX 1080 campaign. Review them before deployment.
+
+The transfer helpers require an SSH destination, supplied as an argument or through
+`WALLZERO_NODE`. Their default remote directory is `wallzero/output/wallzero-output`,
+relative to the remote account's home directory. Set `WALLZERO_REMOTE_DIR` or pass a
+remote-directory argument to override it:
+
+```bash
+export WALLZERO_NODE=training-node
+bash scripts/pull_node_chunks.sh
+bash scripts/push_node_checkpoint.sh artifacts/runs/a100-bootstrap/best-gate-passed.pt
+```
+
+Positional arguments take precedence over environment variables. The pull helper
+accepts `[node] [remote-dir] [local-dir]`; the push helper accepts
+`<checkpoint> [node] [remote-dir]`. The GPU canary stores its reference under the
+executing account's `~/wallzero/` directory.
 
 ## How the engine learns
 
@@ -288,6 +305,12 @@ bunx @biomejs/biome check --write wallz-coach.user120.js wallz-coach.user120.tes
 ```
 
 ## Research notes
+
+Keep raw diagnostic dumps, runtime logs, `.env` credentials, agent worktrees, and
+personal service configurations out of Git. The ignore rules cover these local files;
+the systemd `.service.example` templates, evaluation records, manifests, and documented
+checkpoints remain tracked. `.env.example` is reserved for examples without secrets.
+Ignoring a file does not remove copies already committed in Git history.
 
 | Document                                             | Contents                                                                                        |
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |

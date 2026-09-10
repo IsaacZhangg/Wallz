@@ -9,10 +9,10 @@ Use the local Colab CLI to run explicitly requested workloads on the user's Goog
 
 ## Local installation
 
-- Prefer `colab` from `PATH`; this Mac currently resolves it to `/Users/isaaczhang/.local/bin/colab`.
+- Resolve `colab` from `PATH`; do not hardcode a user's installation path.
 - Run `colab version` when behavior may be version-dependent. Version 0.6.0 was installed when this skill was created.
 - The CLI is the integration surface. It does not expose an MCP server subcommand.
-- If a permission prompt blocks `~/.config/colab-cli` writes or Google network access, retry only the exact Colab command with scoped approval. Prefer a reusable approval for `/Users/isaaczhang/.local/bin/colab`; do not weaken general permissions.
+- If a permission prompt blocks `~/.config/colab-cli` writes or Google network access, retry only the exact Colab command with scoped approval. Scope any reusable approval to the resolved `colab` executable; do not weaken general permissions.
 
 ## Authenticate the correct account
 
@@ -41,17 +41,17 @@ Do not use `colab auth` to fix CLI login. That command injects separate GCP cred
 
 This project trains a 9x9 Quoridor AlphaZero engine on Colab. The `scripts/` directory holds the remote-side pipeline; the campaign scripts assume an A100 (`device_name="cuda"`) and the `colab` preset, and write durable state to `/content/wallzero-output`:
 
-| Script | Purpose |
-| --- | --- |
-| `colab_bootstrap.py` | Install an uploaded source archive (`/content/wallzero-source.tar.gz`) into the runtime |
-| `build_colab_payload.py` | Local fallback: build a self-extracting payload script when file upload is blocked |
-| `colab_validate.py` | A100 correctness and throughput probe — run before any metered training |
-| `colab_chunk.py` | Generate one durable self-play shard |
-| `colab_round.py` | Train and arena-gate one candidate from durable replay shards |
-| `colab_iteration.py` | Run exactly one additional resumable training iteration |
-| `colab_train.py` | General non-interactive entry point (`--preset`, `--iterations`, `--output`) |
-| `colab_bundle.py` | Bundle `/content/wallzero-output` into `/content/wallzero-output.tar.gz` for download |
-| `colab_restore.py` | Restore a previously downloaded bundle uploaded back to `/content` |
+| Script                   | Purpose                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `colab_bootstrap.py`     | Install an uploaded source archive (`/content/wallzero-source.tar.gz`) into the runtime |
+| `build_colab_payload.py` | Local fallback: build a self-extracting payload script when file upload is blocked      |
+| `colab_validate.py`      | A100 correctness and throughput probe — run before any metered training                 |
+| `colab_chunk.py`         | Generate one durable self-play shard                                                    |
+| `colab_round.py`         | Train and arena-gate one candidate from durable replay shards                           |
+| `colab_iteration.py`     | Run exactly one additional resumable training iteration                                 |
+| `colab_train.py`         | General non-interactive entry point (`--preset`, `--iterations`, `--output`)            |
+| `colab_bundle.py`        | Bundle `/content/wallzero-output` into `/content/wallzero-output.tar.gz` for download   |
+| `colab_restore.py`       | Restore a previously downloaded bundle uploaded back to `/content`                      |
 
 Standard campaign cycle on a persistent session:
 
