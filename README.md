@@ -1,108 +1,103 @@
-# WallZero
+# Wallz / WallZero
 
-WallZero is a full-size 9×9 Quoridor engine built around the AlphaGo Zero /
-AlphaZero loop: an exact rules engine, a residual policy-value network, PUCT
-Monte Carlo Tree Search, pure self-play, replay training, and candidate-vs-best
-arena promotion.
+A Quoridor practice coach and a self-play learning engine for the full 9×9 game.
 
-The project is deliberately split in two:
+| Component                                      | What it does                                                                                                                    | What you need                                               |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| [Wallz Practice Coach](wallz-coach.user120.js) | Reads the browser board, highlights a move, explains route impact, and optionally plays it. Includes a classical search engine. | A userscript manager and a Wallz.gg practice game.          |
+| [WallZero](src/wallzero/)                      | Learns a policy and value network through self-play, evaluates checkpoints, and serves move analysis.                           | Python 3.11+ and uv. A GPU helps with larger training runs. |
 
-- `wallzero` is the standalone engine and training system.
-- `wallz-coach.user120.js` remains the Wallz.gg practice-board adapter. It is
-  not coupled to a particular checkpoint and is not used in ranked play.
+The coach works without Python or a neural checkpoint. WallZero is experimental; the
+[recorded evaluations](#strength-gates) do not establish parity with the coach's
+classical engine.
 
-The neural engine starts from random weights and receives no human games,
-openings, strategy labels, or handcrafted position scores. Legal-action masks,
-terminal outcomes, board symmetries, an exact rule-derived wall-free endgame
-solver, and the rules themselves are the only non-learned game knowledge in
-the training loop.
+[Use the coach](#use-the-browser-coach) · [Run locally](#run-wallzero-locally) ·
+[Train](#train-and-resume) · [Protocol](#analysis-protocol) ·
+[Development](#development) · [Research notes](#research-notes)
 
-> Strength is an evaluated artifact, not an architectural claim. A checkpoint
-> is only called the best model after it beats the incumbent in a color-balanced
-> MCTS arena. “Expert” additionally requires a documented evaluation suite and
-> enough independent games to make the estimate credible.
+## Use the browser coach
 
-## What improves on the reference
+1. Create a new script in your userscript manager, such as Tampermonkey.
+2. Replace the template with the full contents of
+   [wallz-coach.user120.js](wallz-coach.user120.js), then save and enable it.
+3. Open [Wallz.gg](https://wallz.gg/) and start a game against the computer.
+4. The Routefinder panel shows a recommendation on your turn. Follow the highlighted
+   pawn move or wall placement and compare the route distances.
 
-[dorakingx/AlphaQuoridor](https://github.com/dorakingx/AlphaQuoridor) is a clear
-teaching implementation of the AlphaZero cycle. Its published example trains a
-3×3 variant with a small search. WallZero keeps the useful decomposition while
-targeting the actual game:
+Use the coach only for vs-computer practice. The current script checks board freshness,
+turn ownership, and move legality, but does **not** independently verify the match mode.
+Disable the script before entering multiplayer or ranked games.
 
-- exact 9×9 rules and the complete 209-action space;
-- compact immutable bitboards and bit-parallel path validation;
-- a wall-free retrograde endgame solver that supplies exact optimal root
-  actions and policy targets during self-play, adjudicates wall-free arena
-  positions, and backs up exact values at search leaves;
-- separate reporting of repetition draws and move-limit draws in self-play
-  and arena metrics;
-- current-player canonicalization plus exact left/right augmentation;
-- a configurable residual policy-value network;
-- batched GPU inference across concurrent self-play games;
-- root Dirichlet exploration, temperature scheduling, and tree reuse;
-- virtual-loss leaf batching (several distinct leaves per tree per forward
-  pass) and multiprocess actors feeding one central batched inference
-  server, so GIL-bound tree/rules work no longer serializes GPU use —
-  measured 3.5x self-play throughput on an M4 Pro and 7.2x on an A100
-  versus the single-process loop, identical data recipe (`wallzero.parallel`;
-  `leaf_batch=1` reproduces the original search exactly and stays the default
-  for deterministic runs); the same server drives two-model arenas and
-  evaluation matches (requests are tagged per model, whole color-pairs stay
-  within one worker), cutting a 60-game arena from ~8.5 to ~3.5 minutes;
-- replay shards, resumable checkpoints, mixed precision, and deterministic
-  seeds;
-- color-balanced arena gates with paired uniform-random openings: both games
-  of a color pair start from the same rule-derived random prefix, so the gate
-  measures the models rather than one deterministic trajectory;
-- KataGo's self-play efficiency package (see `docs/katago-adaptations.md`):
-  playout cap randomization, forced playouts with policy target pruning,
-  shaped Dirichlet noise, root policy softmax temperature, policy surprise
-  weighting, exact shortest-path distance auxiliary targets (the ownership
-  analog), and gateless training rounds — all opt-in, with defaults that
-  reproduce the original pipeline bit-for-bit;
-- an independent strength-evaluation module (`wallzero.evaluation`) reporting
-  Wilson 95% intervals, kept separate from the promotion gate;
-- a versioned JSON analysis protocol for the eventual userscript bridge.
+| Control            | Behavior                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| Recalculate        | Starts a fresh analysis and retries the local WallZero connection when enabled.                                    |
+| Autoplay           | Off on page load. When armed, applies a fresh legal recommendation and checks that the board accepted the input.   |
+| WallZero           | Toggles the optional local neural engine. The preference persists in browser storage.                              |
+| Export latest loss | Downloads a local JSON diagnostic report after a recorded loss. The browser retains the three most recent reports. |
 
-## Architecture
+The built-in engine uses adaptive search with a budget of up to 1.5 seconds. Board hints
+account for rotation. Autoplay pauses when the tab is hidden, the board cannot be read,
+or automatic input fails.
 
-```text
-exact rules ──> PUCT self-play ──> replay shards ──> policy/value training
-     │                                                       │
-     └──────────── candidate-vs-best arena <─────────────────┘
-                               │
-                         promoted checkpoint
-                               │
-                     JSON engine protocol (v1)
-                               │
-                 practice-only userscript adapter
-```
+### Connect the optional neural engine
 
-The fixed action layout matches the browser engine:
-
-- `0..80`: pawn destination cell;
-- `81..144`: horizontal wall anchor;
-- `145..208`: vertical wall anchor.
-
-## Local development
-
-Python dependencies and commands use `uv`:
+After [installing WallZero](#run-wallzero-locally), serve the included, frozen round-14
+checkpoint:
 
 ```bash
-uv sync --group dev
-uv run pytest
-uv run ruff check --fix .
-uv run ruff format .
-uv run ty check
+uv run wallzero serve \
+  --checkpoint artifacts/runs/a100-bootstrap/best-gate-passed.pt \
+  --http 8787
 ```
 
-Run the smallest end-to-end learning sanity check:
+Leave that process running, then reload the practice page or click Recalculate. The
+WallZero button reports the connection state. The server binds to `127.0.0.1` by
+default; the coach connects to port `8787`.
+
+If the panel reports an offline engine, check the server:
 
 ```bash
-uv run wallzero smoke --output artifacts/runs/smoke
+curl http://127.0.0.1:8787/health
 ```
 
-Run a resumable training preset:
+The response should contain `"schema": "wallzero.health.v1"` and `"status": "ok"`.
+Failed or timed-out analysis requests fall back to the classical engine with a visible
+offline note. Replies must match the request ID and position fingerprint, and the
+recommended move must still be legal.
+
+## Run WallZero locally
+
+Install Python 3.11+ and uv, then clone the repository and sync its locked dependencies:
+
+```bash
+git clone https://github.com/IsaacZhangg/Wallz.git
+cd Wallz
+uv sync --locked --group dev
+```
+
+Run the smallest complete learning loop on CPU:
+
+```bash
+uv run wallzero smoke --output artifacts/runs/smoke --device cpu
+```
+
+This generates self-play data, trains a candidate, runs a two-game arena, and writes
+checkpoints and metrics. It checks that the stages work together; the resulting model
+has no established playing strength.
+
+Inspect a checkpoint or list the CLI commands:
+
+```bash
+uv run wallzero inspect-checkpoint --checkpoint artifacts/runs/smoke/best.pt
+uv run wallzero --help
+```
+
+Commands that accept `--device` default to `auto`, which selects CUDA, then Apple MPS,
+then CPU. Use `--device cpu`, `--device mps`, or `--device cuda` to choose explicitly.
+
+## Train and resume
+
+Start with the bootstrap preset:
 
 ```bash
 uv run wallzero train \
@@ -111,517 +106,198 @@ uv run wallzero train \
   --device auto
 ```
 
-`bootstrap` proves that rules, search, replay, optimization, checkpointing, and
-arena evaluation work together. It is not an expert-strength budget. The
-`colab` and `expert` presets progressively raise network size, simulations,
-self-play volume, and arena confidence.
+The CLI presets in [pipeline.py](src/wallzero/pipeline.py) set the following budgets.
+Network sizes are residual blocks × channels.
 
-## Colab A100 workflow
+| Preset      | Network  | Self-play games per iteration | Simulations per self-play move | Arena games | Total iterations |
+| ----------- | -------- | ----------------------------- | ------------------------------ | ----------- | ---------------- |
+| `smoke`     | 2 × 32   | 2                             | 4                              | 2           | 1                |
+| `bootstrap` | 6 × 64   | 32                            | 64                             | 16          | 3                |
+| `colab`     | 10 × 128 | 128                           | 160                            | 40          | 12               |
+| `expert`    | 15 × 192 | 1,024                         | 800                            | 200         | 100              |
 
-The repository includes `scripts/colab_train.py`, a non-interactive entry point
-for a named Colab session. A run writes all durable outputs below its selected
-output directory:
+The `expert` name describes a compute budget, not a demonstrated skill level. Campaign
+scripts can override these presets; their recorded runs are separate from this CLI
+quickstart.
+
+Each run keeps its outputs together:
 
 ```text
-best.pt                 current promoted model
-candidates/             every trained challenger
-replay/                 compressed self-play shards
-metrics.jsonl           iteration, losses, arena score, timing
-run-state.json          resumable iteration metadata
+artifacts/runs/bootstrap/
+├── best.pt          # Initial model, then the latest arena-promoted model
+├── candidates/      # Trained challengers, including rejected candidates
+├── replay/          # Compressed self-play shards
+├── metrics.jsonl    # Losses, arena results, promotion decisions, and timing
+└── run-state.json   # Completed iteration count and checkpoint paths
 ```
 
-The A100 accelerates neural inference and training. Quoridor legal-wall
-generation remains partly CPU-bound, so self-play concurrency and inference
-batch size matter more than raw GPU utilization alone.
-
-## Engine protocol and browser boundary
-
-The engine accepts one JSON object per line over stdio, or the same request
-via localhost HTTP for the practice userscript:
+Rerun the same command with the same preset and output directory to resume from the last
+completed iteration. `--iterations` sets the total target, not an additional count. For
+example, extend a three-iteration run to six:
 
 ```bash
-uv run wallzero serve --checkpoint artifacts/runs/a100-bootstrap/best-independent.pt --http 8787
+uv run wallzero train \
+  --preset bootstrap \
+  --output artifacts/runs/bootstrap \
+  --iterations 6
 ```
 
-`POST /analyze` takes the identical JSON body and returns the identical
-response; `GET /health` reports engine availability. The server binds
-127.0.0.1 only. The userscript probes `/health` at load, verifies the schema,
-request id, response fingerprint, and move legality on every reply, discards
-stale or illegal replies, and falls back to the built-in engine with a visible
-"WallZero offline" note whenever the local server is unreachable.
+Resume works at iteration boundaries. An interrupted iteration runs again; the CLI does
+not restore an in-progress search or optimizer step. Use a new output directory for a
+separate experiment.
 
-The stdio form accepts one JSON object per line:
+For a Colab GPU runtime, [scripts/colab_train.py](scripts/colab_train.py) wraps the same
+loop and reports accelerator details. The scripts under `scripts/node_*` and
+`scripts/systemd/` support the dedicated training node and contain deployment paths and
+hardware settings. Review those before adapting them to another machine.
+
+## How the engine learns
+
+```mermaid
+flowchart TD
+    checkpoint[Current checkpoint] --> selfplay[PUCT self-play]
+    selfplay --> replay[Replay shards]
+    replay --> training[Policy/value training]
+    training --> arena[Candidate-vs-best arena]
+    arena -->|Passes promotion gate| checkpoint
+    checkpoint --> service[JSON analysis service]
+    service -. Optional localhost connection .-> coach[Practice coach]
+```
+
+WallZero starts from random weights. It uses no human games, opening books, strategy
+labels, or scores from the classical coach in its training loop. Training uses game
+outcomes, legal-action masks, board symmetries, and exact rule-derived information.
+
+- The rules engine handles pawn jumps, diagonal moves, wall overlap and crossing, and
+  the requirement that both players retain a path to goal.
+- Position encoding uses 13 planes in the current player's orientation, with left/right
+  symmetry augmentation.
+- PUCT Monte Carlo Tree Search uses network policy and value predictions, exploration
+  noise during self-play, temperature scheduling, and tree reuse.
+- An exact pawn-race solver handles positions where both players have spent all their
+  walls, with the placed wall layout held fixed. It supplies search values, self-play
+  targets, and arena adjudications.
+- Batched inference and optional multiprocess actors support larger runs. `leaf_batch=1`
+  is the reference search path; larger virtual-loss batches change visit allocation and
+  should be recorded with evaluation results.
+- Optional KataGo adaptations include randomized playout caps, forced playouts with
+  policy target pruning, policy surprise weighting, and a shortest-path distance head.
+  The default network uses BatchNorm; fixed-scale normalization, global pooling, and
+  dual training/inference heads are available by configuration.
+
+The training-loop decomposition draws on
+[AlphaQuoridor](https://github.com/dorakingx/AlphaQuoridor). The
+[KataGo adaptation notes](docs/katago-adaptations.md) track implemented options,
+experiments, and remaining work.
+
+## Strength gates
+
+Training loss and arena promotion measure different things. The standard CLI promotes a
+candidate through paired games with swapped colors and shared random openings. Some
+research campaigns deliberately adopt every candidate without a gate, so a file named
+`best.pt` alone is not evidence of strength.
+
+Recorded July 2026 results illustrate the gap:
+
+| Checkpoint and opponent         | Budget and sample                                                | Recorded result                                                                                            |
+| ------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Round 14 vs uniform-prior MCTS  | Equal 192 simulations, 600 games across three seeds              | 57.5% score; 95% Wilson interval 53.5–61.4%. [Evidence](artifacts/runs/a100-bootstrap/strength-eval.jsonl) |
+| Round 24 vs frozen round 14     | Equal 192 simulations, 600 games                                 | 50.0% score; interval 46.0–54.0%. [Evidence](artifacts/runs/a100-bootstrap/strength-eval-r24-30m.jsonl)    |
+| Round 31 vs the classical coach | WallZero at 160 simulations, classical adaptive search, 30 games | 0 wins, 30 losses. [Evidence](artifacts/runs/a100-bootstrap/classical-match-r31.jsonl)                     |
+
+Score counts a draw as half a win. The round-14 result supports an advantage over the
+uniform-prior control. It does not establish expert play or an advantage over the
+classical coach. Independent evaluations live in
+[evaluation.py](src/wallzero/evaluation.py); strength claims require a frozen
+checkpoint, recorded search settings, independent seeds, and confidence intervals.
+
+The [training history](docs/training-history.md) preserves the campaign record,
+including failed hypotheses and the later restart from round 31.
+
+## Analysis protocol
+
+The same request works with `POST /analyze`, the `analyze` CLI command, and the
+JSON-lines stdio server. Save this example as `request.json`:
 
 ```json
 {
   "schema": "wallzero.analyze.v1",
   "id": "position-42",
   "state": {
-    "pawns": {"p1": {"x": 4, "y": 0}, "p2": {"x": 4, "y": 8}},
+    "pawns": {
+      "p1": { "x": 4, "y": 0 },
+      "p2": { "x": 4, "y": 8 }
+    },
     "turn": "p1",
     "walls": [],
-    "wallsRemaining": {"p1": 10, "p2": 10},
+    "wallsRemaining": { "p1": 10, "p2": 10 },
     "winner": null
   },
-  "options": {"simulations": 800, "topMoves": 5}
+  "options": { "simulations": 16, "topMoves": 5 }
 }
 ```
 
-Start the JSON-lines process with:
-
 ```bash
-uv run wallzero serve --checkpoint artifacts/runs/expert/best.pt
+uv run wallzero analyze \
+  --checkpoint artifacts/runs/a100-bootstrap/best-gate-passed.pt \
+  --request request.json
 ```
 
-The response includes the exact state fingerprint, selected legal move, root
-value, visit count, and top policy alternatives. The future userscript bridge
-must retain the existing fail-closed computer-practice checks and verify the
-live position again before displaying or applying a recommendation.
+Coordinates are zero-based. Player 1 aims for row `8`; player 2 aims for row `0`. Placed
+walls use objects such as `{ "o": "h", "x": 3, "y": 4 }`, with `h` or `v` orientation
+and anchor coordinates from `0` to `7`.
 
-## Strength gates
+The response schema is `wallzero.analysis.v1`. It includes the request ID, position
+fingerprint, selected move, action code, root value, simulation budget, and top moves
+with visit counts and probabilities. Root value is from the player-to-move perspective.
 
-Training progress is judged in layers:
+Both engines share a fixed 209-action layout:
 
-1. **Rule correctness:** curated jump/wall fixtures, randomized invariant tests,
-   and parity checks against the browser engine.
-2. **Learning sanity:** policy loss falls, values separate wins/losses, and the
-   model reliably beats a random-policy MCTS control.
-3. **Promotion:** a challenger exceeds the configured arena threshold with both
-   colors against the prior best checkpoint.
-4. **Expert claim:** a frozen checkpoint wins a large, independently seeded
-   match set against strong non-training opponents, with confidence intervals
-   and reproducible configuration recorded.
+| Action codes   | Meaning                                       |
+| -------------- | --------------------------------------------- |
+| `0` to `80`    | Pawn destination, encoded as `y * 9 + x`.     |
+| `81` to `144`  | Horizontal wall, encoded as `81 + y * 8 + x`. |
+| `145` to `208` | Vertical wall, encoded as `145 + y * 8 + x`.  |
 
-Self-play can run for a very long time. The pipeline is intentionally resumable;
-ending a compute session does not turn an early checkpoint into an expert one.
+For stdio, run `wallzero serve` through uv with a checkpoint and omit `--http`. Send one
+complete JSON object per line. The protocol implementation and HTTP error handling are
+in [protocol.py](src/wallzero/protocol.py).
 
-## Recorded status (2026-07-29 night, weight decay and the BN trunk)
+## Development
 
-Audit round 6 read KataGo's training source directly (see
-`docs/katago-training-audit.md`) and found a mechanism, not just a
-feature gap. Our trunk is `conv(bias=False) → BatchNorm` throughout, so a
-conv's weight *scale* is invisible to the forward pass; what matters is
-the relative step `Δw/‖w‖`. Measured on our own checkpoints, era 2 grew
-conv weight L2 by **88%** from r31 to r59 — **99 of 99 conv tensors
-grew**, median 1.71× — so the net was quietly taking ever-smaller
-relative steps while its losses kept falling. Era 3 is repeating it
-(+8% in five rounds).
+Python dependencies and development tools use uv. Bun runs the userscript tests; Node.js
+is also needed for the Python-to-JavaScript rules parity test, which otherwise skips.
 
-KataGo scales weight decay by `lr^0.75`, by `sqrt(batch/256)`, and by an
-adaptive factor tracking model norm against a baseline, precisely to hold
-BN effective LR constant; their AdamW+BN constant is ~100× ours, and
-they exempt biases and norm betas that we were decaying.
+```bash
+uv run pytest
+bun test wallz-coach.user120.test.js
+```
 
-Shipped at round 69: KataGo's decay groups
-(`training.py:_weight_decay_groups`) — trunk weights 0.009, head weights
-0.004, BN gammas at a 0.25 factor, biases/betas exempt at 1e-6, all
-scaled by `sqrt(batch/256)`. `TrainMetrics` now records
-`weight_norm_start`/`weight_norm_end` every round, so the norm
-trajectory lands in the round logs and the mechanism stays visible.
+The tests cover rules and legality, board transforms, the pawn-race solver, search,
+replay, training resume, network architectures, evaluation, and the browser protocol.
+They do not establish compatibility with a changed live Wallz page or prove playing
+strength.
 
-Honest caveat on magnitude: at our LR the reference constant cancels
-roughly half of era 2's measured per-step drift, and less of era 3's
-(short rounds re-initialise AdamW each time, and those transients are
-themselves a norm-inflation source KataGo does not have — they run one
-continuous optimizer). The per-round norm log is the instrument: if it
-keeps climbing, the escalations are optimizer-state continuity across
-rounds and a larger decay constant.
+Before pushing code changes, update this README and run the relevant checks:
 
-## Recorded status (2026-07-29 evening, the shard-load stall)
+```bash
+uv run ruff check --fix src tests scripts
+uv run ruff format src tests scripts
+uv run ty check
+bunx @biomejs/biome check --write wallz-coach.user120.js wallz-coach.user120.test.js
+```
 
-Era 3 lost ~10 hours to a latent bug that only the all-data window could
-expose. `load_shard` held an open `NpzFile` and indexed it *inside* its
-per-row loop, so each of ~12 columns was decompressed out of the zip
-again for every row: **18.4 s per 5K-row shard**. At 45 shards (r67) a
-round still finished; at 71 the window load reached **21.7 min** and
-crossed the flywheel's 15-min power watchdog, which killed the round
-before it ever touched the GPU. Twenty-two consecutive rounds died that
-way (08:54 → 18:32, all status 137), and because each attempt paused
-generation for ~17 of every ~29 minutes, the node was also generating at
-roughly 40% duty the whole time.
+## Research notes
 
-Two fixes, both shipped and deployed:
+| Document                                             | Contents                                                                                        |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [Training history](docs/training-history.md)         | Archived campaign observations, benchmarks, failures, and the July 29 restart.                  |
+| [KataGo adaptations](docs/katago-adaptations.md)     | Implemented techniques and measured search experiments.                                         |
+| [Training audit](docs/katago-training-audit.md)      | Replay, optimization, architecture, and compute investigations.                                 |
+| [Adoption plan](docs/katago-adoption-plan.md)        | The July 29 proposal for architecture and training changes, before the later campaign decision. |
+| [Data-volume test](docs/data-volume-test.md)         | Predeclared test, early closure, and the replay-window confound.                                |
+| [GTX 1080 incident log](docs/node-1080-wedge-log.md) | CUDA stalls, hardware measurements, and recovery experiments.                                   |
+| [Campaign artifacts](artifacts/runs/a100-bootstrap/) | Committed checkpoints, manifests, and evaluation records.                                       |
 
-- **`load_shard` reads each column once**, before the loop. Verified
-  bit-identical to the old implementation on a real production shard
-  (5,036 examples: states, policies, values, weights and distances all
-  equal, dtypes and Python types preserved). Full 71-shard window load on
-  the node: **21.7 min → 2.3 s** for 355,133 examples.
-- **The flywheel's power watchdog now arms** on the first ≥110W sample or
-  after `FLYWHEEL_LOAD_GRACE` minutes (default 30), whichever comes
-  first. A round is no longer punished for its CPU-side load phase, while
-  a genuine wedge is still caught within 15 min of the GPU going quiet.
-
-Lesson recorded: the watchdogs assume "training round running" implies
-"GPU busy". Any pre-GPU phase that grows with the replay window can
-recreate this, so growth-sensitive phases need their own grace, not the
-steady-state rule.
-
-## Recorded status (2026-07-28, era 3: the window fix and the restart)
-
-The data-volume test closed falsified — and the post-mortem found the
-reason it never could have succeeded: training only ever consumed the
-newest 60K positions (~1,100 games, ~26 epochs/round), so generated
-volume accumulated on disk without ever entering the training
-distribution. Full record and measurements in
-`docs/data-volume-test.md` (r59 flat vs both r31 and r14 at 100 games
-each; classical KPI 0-40; verified style drift to move-1 walls).
-
-Era 3 (live since 19:41): node reset to the frozen r31 tag (equal
-measured strength, verified sane style), era-2 shards archived to
-`replay-era2/` on the node (they encode the drifted style), and the
-recipe changed in exactly one place — `node_round_kata.py` now trains
-on ALL accumulated shards with steps scaled to ~3 epochs/round (capped
-at 3,000). New guardrails so a flat or regressing lineage can never
-again run unmeasured: `node_anchor_match.py` plays best.pt vs a frozen
-anchor (100 games, 192 sims, fixed seed) after every 5th adopted round
-— promotion at ≥0.60 re-anchors, <0.40 writes REGRESSION-ALARM which
-suspends training (generation continues) until a human clears it.
-Timeline accumulates in `strength-timeline.jsonl`; anchors live in
-`~/wallzero/anchors/` (r31 base + r59 kept as junk-style control).
-Era-3 prediction, pre-stated: >0.55 vs the r31 anchor within ~10-15
-rounds, or the window hypothesis is falsified too.
-
-## Recorded status (2026-07-26 evening, node watchdog hardening)
-
-The generation node became self-healing end to end. Context: the P2 clock
-latch (1670 MHz) recurred **spontaneously** the same evening — no
-`nvidia-smi -pl` involved; the suspected trigger is idle/load P-state
-cycling between chunks. Offsets queried as applied, no throttle reasons
-active, PowerMizer and offset re-toggles did not clear it; that episode
-only cleared on reboot (but see the night-shift addendum below — a later
-episode cleared without one). Chunk 130 ran at 6.66 pos/s instead of
-~7.05, invisible to the old power-only watchdog — "slow" is a failure
-mode distinct from "dead".
-
-Hardening shipped (repo `scripts/node_*.sh` + `scripts/systemd/`, deployed
-to `~/wallzero/` and `/etc/systemd/system/` on the node):
-
-- **Clock watchdog** in `gen_loop.sh`: under real load (>=110W), SM clocks
-  below 1700 MHz for 10 min → re-apply `gpu-oc.sh` once (covers lost
-  offsets after an X restart); still latched 10 min later → reboot at the
-  next *chunk boundary* (no work lost), rate-limited to one auto-reboot
-  per 6h and only when systemd autostart is enabled.
-- **Fail-safe power reads**: a failed/garbled `nvidia-smi` read now counts
-  as unhealthy (the old code defaulted to a healthy 200W, so a dead driver
-  looked fine forever).
-- **Group-scoped worker sweeps**: `pkill -9 -g <chunk_pgid>` replaces the
-  broad `pkill -f spawn_main` that once killed a healthy training round's
-  loaders. Failed chunks escalate: 5-min backoff from the 3rd consecutive
-  failure, last-resort reboot from the 5th.
-- **Tagged PAUSE**: the flywheel writes `flywheel:<pid>` into PAUSE; a
-  pause whose owner died with no round running is removed automatically
-  (by gen_loop after 3 min, by the flywheel at startup, by boot prep after
-  a reboot). Manual PAUSE files (any other content) are never touched and
-  now survive reboots meaningfully.
-- **Flywheel power watchdog**: a wedged training round (same <110W/15-min
-  rule) is killed instead of burning its full 3h timeout with generation
-  paused. (Since 2026-07-29 the rule only arms once the round has reached
-  the GPU, or after `FLYWHEEL_LOAD_GRACE` minutes — see the shard-load
-  stall above.)
-- **Boot recovery** (`wallzero-prep/gen/flywheel.service`): on every boot,
-  prep waits for GPU+X, runs the bitwise canary at stock clocks
-  (re-recording the reference there if best.pt changed — stock is always
-  trustworthy), applies the validated OC, and re-verifies; canary failure
-  falls back to stock. Generation and flywheel then start supervised
-  (`Restart=always`), so a power blip, script crash, or auto-reboot no
-  longer needs a human. The old `setsid nohup` launch procedure is
-  obsolete.
-
-### Night-shift addendum (2026-07-26 late): the latch model, revised live
-
-Round 40 settled an open question: it trained in 2980 s — identical to
-round 39's 2979 s — while the core read 1670 MHz throughout. **Training
-speed is unaffected by the latch** (the +800 mem offset, which survives
-latches, carries training); a 1670 MHz core reading during a training
-round is a non-signal. Do not "fix" it.
-
-Generation then resumed latched for the second time in two post-training
-resumes — the trigger is all but confirmed as the training→generation
-P-state transition, meaning every flywheel round may re-latch the card.
-Watching the (new) clock watchdog respond exposed a live bug: its
-counters reset per chunk, and a latched chunk only lasts ~13.5 min, so
-the 10-min re-apply stage fired every chunk while the 10-more-minutes
-reboot stage was unreachable. Fixed by persisting the counters across
-chunk boundaries (a healthy sample re-arms the ladder).
-
-The fixed ladder then produced a surprise: after the stage-1 offset
-re-apply (22:33), clocks recovered to 1898 MHz **without a reboot** ~8
-min later, mid-chunk — falsifying "only a reboot clears it". But the
-post-round-41 episode showed that self-heal is unreliable (1 of 2):
-stage 1 fired at 00:18, clocks stayed latched through a chunk boundary,
-stage 2 declared the reboot at 00:29, and at 00:35:45 the **first fully
-autonomous recovery ran end to end**: boundary reboot (chunk-140 shard
-saved first), 28-s boot, prep detected a stale canary reference (best.pt
-had advanced two rounds), re-recorded it at stock, applied OC, PASS at
-224 iterations, and chunk 141 was generating at full clocks at 00:37:51
-— **under 2 minutes of downtime**, flywheel baseline intact. Measured
-economics: the latch costs 0.37 pos/s (6.68 vs 7.05, chunk 134), a full
-episode ending in reboot ~1150 positions (~2% of a cycle), one that
-self-heals ~450. The 6-h reboot rate limit is the right shape: never
-reboot for a latch preemptively; let the ladder decide. The fan-80%
-trigger hypothesis stays untested (config held constant overnight so
-post-training resumes stay a clean reproducibility test; the latch is
-now 3-for-3 on those resumes); it is a daylight experiment.
-
-Full night's tally (2026-07-26 22:00 → 07-27 06:46, zero human
-intervention): rounds 40-44 trained and adopted on cadence, every one at
-~2980 s regardless of latch state; losses monotonic (total 1.5820 →
-1.5240, value 0.0999 → 0.0878); replay 87 shards / 500,435 positions
-(376,894 post-chunk-82, ~62% of the pre-declared 1M data-volume
-trigger). Two autonomous reboots (00:35 and 06:42 — the second at the
-first chunk boundary after the 6-h rate limit expired, ending ~4.5 h of
-correctly-chosen degraded-mode generation), both under 2.5 min downtime
-with the in-flight shard saved and the canary re-verified. Every latch
-was triggered by a train↔generate P-state transition; generation-side
-latches are now 4-for-4 on those transitions.
-
-**Fault audit (2026-07-27 morning) — the latch is driver-side, not our
-configuration.** Every our-fault hypothesis was tested and excluded:
-(1) we never set clock locks — no `-lgc`/`-ac` anywhere, and this board
-reports Applications Clocks unsupported (N/A); (2) the offset is applied
-via `GPUGraphicsClockOffsetAllPerformanceLevels` — the same attribute
-NVIDIA's own GUI uses, and the documented-correct method for Pascal
-(offsets apply to all perf levels); (3) the decisive observation:
-healthy and latched runs are BOTH in P2 with identical queried config
-(offset 125 on all levels) — healthy sustains 1860-2025 MHz, latched
-pins exactly stock-sustained 1670, so the driver reports one thing and
-does another; (4) one trigger was `nvidia-smi -pl` alone, which never
-touches the offset path; (5) zero Xid/NVRM/Xorg errors across all
-boots (580.173.02); (6) re-applying the identical config sometimes
-fixes it minutes later (2 of 5 self-heals) — replaying unchanged
-config can only matter if hidden driver state is flaky. External
-record: silent regressions in this exact subsystem (offsets/fan/
-PowerMizer acknowledged but not honored) recur across driver branches
-(390→580 reports; a 520-branch report shows `-lgc` acknowledged and
-ignored the same way), and Pascal's forced-P2 compute transitions are
-notoriously janky (the SETI community built `keepP2` — a tiny
-always-on CUDA kernel — specifically because 10-series cards misbehave
-at compute-load boundaries). Residual uncertainty: no public report of
-this exact 1670-latch signature was found; a VBIOS interaction can't be
-excluded. Definitive test if ever needed: driver downgrade. Promising
-prevention candidate from the audit: a keepP2-style keep-alive kernel
-across the train↔generate handoff, so the card never leaves P2 —
-the latch is 5-for-5 on exactly those transitions. **Tried and falsified
-2026-07-27** (`scripts/node_gpu_keepalive.py` +
-`wallzero-keepalive.service`, kept in-repo as a documented dead end,
-service disabled): with the keep-alive verified holding the card in P2
-continuously — near-idle samples read P2/1670/48 W instead of the old
-P8/139 MHz drops — the card **latched anyway** at 11:04-11:05, under
-~full load, ~2 min after a routine chunk boundary, on a freshly
-rebooted card. So the trigger is NOT the idle P-state excursion; the
-hidden driver state can flip while continuously in P2, with elevated
-probability around workload rearrangements (post-training resumes
-remain 5-for-5). Do not re-try keep-alive variants.
-
-**Deep-dig conclusions (2026-07-27 afternoon).** The symptom matches
-NVIDIA's own acknowledged bug 5934973 — "when the graphics card is
-overclocked, GPU voltage may become capped, preventing it from boosting
-to expected levels" — which shipped in the 2026 595-era drivers on BOTH
-Windows (recalled + hotfixed 595.76/78) and Linux (user-measured on
-595.45.04). Our 580.173.02 legacy build is dated June 2026, months
-after that regression existed upstream, and legacy branches receive
-backports. Forensics with the card latched live: the driver's perf
-table still advertises nvclockmax 2088 with the mem offset applied
-(4913) while the governor sits at 1670 — and Pascal exposes no voltage
-query to confirm the cap directly. Every remedy short of reboot is now
-tested-dead: offset re-apply (2/5), persistence-mode toggle (no),
-PowerMizer registry keys (removed from the driver after 525),
-`-lgc` (Volta+ only), `-ac` (unsupported on this board). Constraints on
-driver rollback: 580 is officially the LAST Pascal branch (support to
-Aug 2028), apt carries ONLY 580.173.02 for noble, and the node runs
-kernel 7.0 that older point releases (580.142/570.x) predate — a failed
-DKMS build would take down X and with it the OC entirely. Decision:
-accept-and-manage through the data-volume milestone; an
-`nvidia-bug-report.log.gz` captured DURING a live latch is saved at
-`artifacts/nvidia-bug-report-latched-580.173.02.log.gz` for an upstream
-report to the 580-legacy feedback thread (real path to a fix — the
-branch takes critical fixes until 2028).
-
-## Recorded status (2026-07-26, node efficiency pass)
-
-Three stacked, individually measured changes took GTX 1080 generation from
-3.96 pos/s (~22-min 96-game chunks) to **7.05 pos/s (12.8-min chunks,
-+78%)**, each verified on full production-recipe chunks:
-
-1. **Frozen TorchScript inference (+11.6%, chunks 121/123 at 4.31-4.42):**
-   `torch.jit.trace` + `freeze` + `optimize_for_inference` in
-   `TorchEvaluator` folds batchnorm and NNC-fuses the elementwise/SE
-   chains (max logit deviation 1.8e-4, the same order as batchnorm folding
-   alone). Gated to fp32 CUDA (pre-Ampere) because autocast does not apply
-   inside TorchScript; the A100 bf16 and MPS paths keep the eager module.
-2. **Position-evaluation cache (+44%, chunk 124 at 6.21):** the eval
-   server keys a bounded LRU (400K entries, ~0.5GB, `WALLZERO_EVAL_CACHE`)
-   on a BLAKE2b digest of the exact input planes; **32% of all evaluation
-   requests repeat** (shared openings across 96 concurrent games,
-   transpositions, re-searched subtrees) and now cost a RAM lookup instead
-   of a GPU forward. Off by default; hit/miss stats print at chunk end.
-   Idle CPU/RAM buying back GPU forwards was the only productive use found
-   for the mostly idle i7 — extra workers cannot add throughput at the
-   inference roofline.
-3. **GPU clock offsets via Coolbits (+13.6%, chunk 125 at 7.05; final
-   config chunk 129 at 7.09):** fan at 100% (76→56-63C under load) plus
-   +125 MHz core / +800 MT/s memory offsets — the validated maximums:
-   +150 core fails the bitwise canary, so +125 is this silicon's ceiling
-   at stock voltage. No overvoltage; stock 198W power limit (full OC
-   draws ~195-205W). Sustained compute clocks 1670→1885-1936 MHz, P2
-   memory 4513→4911 (still under its own 5005 spec). Every step passed a
-   bitwise-repeatability canary (`scripts/node_gpu_canary.py` — clocks do
-   not change math, so any output deviation is a silent compute error) and
-   a training-loss sanity bench; round 39 trained in 49.7 min vs 52.3
-   stock. Offsets reset on X restart/reboot; re-apply with
-   `~/wallzero/gpu-oc.sh` (repo: `scripts/node_gpu_oc.sh`, defaults are
-   the validated values). Two traps recorded: (a) the canary reference
-   must be recorded after TorchScript profiling-executor warmup and is
-   bound to the best.pt hash (the flywheel adopts new weights mid-day,
-   which otherwise poisons the comparison); (b) **never run
-   `nvidia-smi -pl` on this node** — changing the power limit (even up)
-   latches the P2 core boost at 1670 MHz on driver 580 + Pascal and only
-   a reboot clears it; discovered when a user-approved 220W cap attempt
-   *pinned* the clocks the offsets had unlocked.
-
-The eval server also gained an async submit/collect pipeline (pinned
-staging buffers, CUDA events) overlapping queue draining and reply
-serialization with GPU compute — measured neutral (back-to-back forwards
-with zero server logic draw the same wattage as live generation, so the
-server never left meaningful GPU idle; power draw is not a utilization
-proxy for this workload). Measured and rejected on this card: fp16
-inference (pseudo-half, 7-10% *slower*, 1000x the deviation — Pascal has
-no usable fp16), inference-side cuDNN autotune and eager batchnorm folding
-(≤1% each), and fp16-vs-fp32 training at batch 512 (identical at ~1.05
-s/step once cuDNN autotune is active; the 07-25 bench showing fp16 at 57
-min predated autotune). Training rounds project ~50 min under the OC —
-near the card's compute floor for the 3,000-step recipe. With ~13-min
-chunks the flywheel now trains (~50 min) after every ~52 min of
-generation; the train/generate cadence itself stays fixed per the
-pre-declared data-volume test design.
-
-## Recorded status (2026-07-26 overnight)
-
-First full night of the free-fleet flywheel: rounds 32-35 trained, adopted,
-and secured (all gateless, 3,000 steps on the 60K window; 52-56 min each on
-the GTX 1080), while the fleet generated **91,868 fresh kata positions** —
-45,213 from the PC (9 chunks at 4.27 pos/s after the bf16 fix below) and
-46,655 from the Mac (10 chunks via a single-process MPS loop; the
-multiprocess self-play path deadlocks on MPS and must not be used there).
-Mac shards are renumbered into the PC replay sequence at each pre-training
-pause. Sanity matches (40 games, 192 sims, paired openings — sanity checks,
-not strength claims): r32 vs r31 0.525 [0.375, 0.671]; r35 vs r31 0.500
-[0.352, 0.648]. Flat short-horizon sanity results are the expected shape
-under the data-volume hypothesis; the decisive pre-declared test
-(docs/data-volume-test.md) triggers at >=1M fresh positions (~9% there
-after one night). Round times: r32 55.9 min, r33 52.2 (cuDNN autotune
-active), r34 103 (an accidental duplicate launch halved throughput — same
-seed, so artifacts were identical and unharmed), r35 52.3.
-
-The morning after, the PC cycle became self-driving:
-`scripts/node_flywheel.sh` (deployed as `~/wallzero/flywheel.sh`) watches
-the replay directory and, every 4 new shards from any source, pauses
-generation, trains one gateless round, adopts it, and resumes. Mac and
-Colab shards still merge manually (renumbered into the PC sequence while
-paused or mid-chunk into free indices); the flywheel counts them like any
-other shard. Manual PAUSE files win — the flywheel never acts while one it
-didn't create exists, and it retries failed rounds after 10 minutes with
-generation running. `train_candidate` also gained a prefetch thread
-(batch assembly overlaps GPU compute; verified bit-identical to the old
-loop). Round 36 was the live measurement and **falsified the speedup
-estimate**: 52.3 min vs the 52.2-52.3 baseline — batch assembly was never
-a meaningful fraction of the step time on the 1080 (and the GIL limits
-overlap for Python-heavy assembly anyway). The change stays because it is
-proven bit-identical and costs nothing, but the 10-20% claim is dead;
-round time on this card is GPU compute, full stop.
-
-## Recorded status (2026-07-25)
-
-The KataGo-recipe campaign (rounds 25-31: playout cap randomization, forced
-playouts with pruned policy targets, shaped Dirichlet, surprise weighting,
-exact-BFS distance head, gateless rounds) moved the classical-engine KPI off
-zero for the first time: 0.05 (0-18-2) at an 800-simulation budget. Three
-plateau hypotheses were then falsified by measurement — legacy-data dilution
-(kata-only retrain scored exactly 0.500), per-round overtraining (a
-KataGo-norm 600-step round was *underfit* and scored 0.475), and weak search
-(LCB selection, distance-margin utility, and subtree value bias correction
-all measured neutral, the last under both a crude and a faithful
-pattern-based bucketing; all remain config-gated, default off). The surviving
-hypothesis is **data volume**, and `docs/data-volume-test.md` pre-declares
-the week-scale test with supported/falsified criteria fixed in advance.
-
-Compute now runs as a three-node fleet: an always-on GTX 1080 generation
-node (`scripts/node_chunk_kata.py` under a watchdogged loop — after a silent
-CUDA stall wedged a chunk for hours at "100% utilization" and near-idle
-power draw, the loop kills anything under 80W for 15 minutes or over 3h
-total), the M4 Pro for free A/B and evaluation (`scripts/ab_search.py`), and
-Colab A100 reserved for the pre-declared evaluation suites. The 1080 also
-closes the training loop: a full 3,000-step round of the 30M network takes
-~53-57 min (`scripts/node_train_bench.py`; torch's bf16-"support" on Pascal
-is emulation, 9.6x slower, now gated off by compute capability in
-`training.py`), so generate → train → adopt runs entirely on free hardware
-with round 32 the first PC-trained round (55.9 min live; sanity match vs
-round 31: 0.525 [0.375, 0.671] over 40 games).
-
-The "silent CUDA stall" was root-caused the same night
-(`docs/node-1080-wedge-log.md`): `TorchEvaluator` autocast sent all CUDA
-inference through torch's *emulated* bf16 on Pascal, and driver 580's
-emulated-bf16 cublasLt kernels can hang inside `cuLaunchKernel` on sm_61
-(py-spy native stack: `cublasLtTSTMatmul` spinning in `sched_yield`).
-`network.py` now gates inference autocast on compute capability >= 8, the
-generation node runs fp32 self-play at sustained 176-205W, and the loop
-script lives at `scripts/node_gen_loop.sh` (watchdog threshold 110W — a
-wedge can float at 88W with persistence mode on).
-
-## Recorded status (2026-07-24)
-
-A durable A100 campaign (`artifacts/runs/a100-bootstrap/`) has completed
-twenty gated rounds with seven promotions; every shard, candidate, decision,
-and checkpoint is checksummed locally and the campaign resumed across five
-Colab VM losses without state regression (round 4 reproduced bit-identically
-from a restored bundle). Since round 15 the campaign runs a hybrid split:
-self-play chunks are generated on a local M4 Pro (`scripts/local_chunk_gen.py`,
-zero compute-unit cost — self-play is actor-CPU-bound and the laptop's cores
-outpace Colab's vCPUs), while the A100 runs training and the multiprocess
-arena; each chunk's durable metrics record the generating device. Rounds
-15-22 produced four promotions (r15, r19, r21, r22); the current best
-checkpoint is the round-22 model. The pre-declared gate-3 suite
-(`strength-eval-gate3.jsonl`) records both verdicts honestly: the round-22
-best **sustains gate 2** against the uniform control (0.5792, 95% CI
-[0.5393, 0.6180], 600 games) but its edge over the frozen gate-2 winner is
-**not statistically established** (0.5317, 95% CI [0.4917, 0.5713], 600
-games) — arena promotions again outran control-relative evidence. Eight
-same-size generations reading as flat at 3.7M parameters pointed to a
-capacity ceiling, so round 23 executed the scale-up: a fresh 29.65M-parameter
-network (256 channels x 24 blocks) trained 4,000 steps from random
-initialization on the 24K-position clean window and **promoted 36-22-2 over
-the 3.7M incumbent** in the standard gate. Round 24 then trained the 30M
-network on its own first self-play (generated on the A100 at leaf_batch 16 —
-96 games in 251s, the same wall time the 3.7M network needed) and promoted
-again (0.575). Independent evaluation immediately deflated both promotions:
-the round-24 best sustains gate 2 against the uniform control (0.5542, 95%
-CI [0.5142, 0.5935], 600 games) but is dead even with the two-day-old
-gate-2 winner (0.5000, 95% CI [0.4601, 0.5399], 600 games) — expected after
-a single generation of its own self-play, but not progress. More decisively,
-the first direct benchmark against the userscript's classical PVS engine
-(`scripts/match_vs_classical.mjs`, evaluation-only, production adaptive
-settings) ended **0-20 against WallZero** at a 160-simulation budget. The
-uniform control that gates 1-3 measure against is a far lower bar than the
-classical engine; the score against the classical engine is now the
-project's standing real-strength benchmark, and it starts at zero. All self-play games end decisively — the wall-free
-solver eliminated draws entirely. Later generations fixed two data-quality
-defects: the cold-start exploration override was poisoning trajectory quality
-(now parameterized; deep chunks use the preset temperature schedule) and
-trimmed-restore chunk renumbering could hide the freshest shards from the
-replay window (indices now continue from the maximum).
-
-Independent evaluation (`strength-eval.jsonl`, `diagnostics-16sim.jsonl`) now
-supports exactly one recorded claim: the frozen round-14 checkpoint
-(`best-gate-passed.pt`, sha256 `48c9b6b9…`) **reliably beats the uniform-prior
-MCTS control at an equal 192-simulation budget** — a pre-declared three-seed
-suite of 600 paired-opening games scored 0.575 (95% CI [0.535, 0.614]; per
-seed 0.535 / 0.578 / 0.613). That passes strength gate 2, so the userscript's
-WallZero bridge (localhost HTTP protocol, fingerprint and legality checks per
-reply, stale-reply discard, timeouts, honest outage fallback) now ships
-enabled; it stays inert unless a local `wallzero serve --http` process answers
-its health probe. Earlier checkpoints failed the same gate (r7 0.5175, r11
-0.4725, r12 0.526 over 500 games) and per-seed scores once swung 0.64→0.45,
-which is why claims here require multi-seed pooled evidence. No "strong" or
-"expert" label is claimed: the expert-scale suite (~1,000 games including the
-classical PVS engine as an opponent) and further scaling remain open work.
+These are dated research records. Hardware state, deployment paths, and references to a
+"current" model describe the recorded run, not a live service status.
